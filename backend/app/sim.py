@@ -348,9 +348,13 @@ async def _lie(pid, a, tick, session, pname, loc, npc, nname, present_ids) -> di
     res = (await store.rw(pid, Q.PLAYER_TELL.cypher, {"fid": fid, "to": npc, "conf": conf, "accept": ACCEPT,
                                                       "tick": tick}))[0]
     conflicts = await store.rw(pid, Q.RESOLVE_CONFLICT.cypher, {"npc": npc, "fid": fid})
-    events: list[dict[str, Any]] = [{"type": "player_tell", "npc": npc, "fact": fid, "claim": claim,
-                                     "confidence": conf, "stance": res["stance"]}]
     caught = any(c["winner"] != fid for c in conflicts)
+    events: list[dict[str, Any]] = [{"type": "player_tell", "npc": npc, "fact": fid, "claim": claim,
+                                     "confidence": conf, "stance": "doubted" if caught else res["stance"]}]
+    for cf in conflicts:
+        events.append({"type": "conflict", "npc": npc, "fact": cf["fact"], "rival": cf["rival"],
+                       "winner": cf["winner"], "c_fact": cf["c_fact"], "c_rival": cf["c_rival"],
+                       "claim": cf["fact_claim"], "rival_claim": cf["rival_claim"]})
     if caught:
         # the listener knows better: the lie itself becomes a story about the player
         lie_claim = f"{pname} tried to pin the {info['name']} theft on {sname}"
