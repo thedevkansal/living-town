@@ -439,8 +439,9 @@ main { min-height: 0; }
 .mg-edge.is-on { stroke: var(--thread); stroke-width: 2.2; stroke-dasharray: none; }
 .mg-edge.is-dim, .mg-node.is-dim { opacity: 0.25; }
 .mg-node { cursor: pointer; transition: opacity 0.3s; }
-.mg-node > * { stroke: var(--walnut); stroke-width: 1.5; }
+.mg-node > :not(text) { stroke: var(--walnut); stroke-width: 1.5; }
 .mg-node--self > circle { fill: var(--c); stroke: var(--linen); stroke-width: 2; }
+.mg-label { font: 500 9.5px var(--ui); fill: var(--linen-2); stroke: var(--walnut); stroke-width: 3px; paint-order: stroke; pointer-events: none; }
 .mg-node--self text { font: 400 16px var(--display); fill: #fff; stroke: none; pointer-events: none; }
 .mg-node--episodic > path { fill: var(--ember); }
 .mg-node--semantic > circle { fill: var(--ink); }
@@ -448,8 +449,8 @@ main { min-height: 0; }
 .mg-node--procedural > rect { fill: var(--moss); }
 .mg-node--coordination > rect { fill: var(--plum); }
 .mg-node--entity > circle { fill: #8a7b6a; }
-.mg-node.is-focus > * { stroke: var(--thread); stroke-width: 3; }
-.mg-node:hover > * { stroke: var(--linen); }
+.mg-node.is-focus > :not(text) { stroke: var(--thread); stroke-width: 3; }
+.mg-node:hover > :not(text) { stroke: var(--linen); }
 .mgraph__tip {
   position: absolute; translate: -50% calc(-100% - 12px); pointer-events: none; z-index: 2;
   background: var(--paper); color: var(--paper-ink); font-size: 12.5px; padding: 4px 8px; border-radius: 6px;

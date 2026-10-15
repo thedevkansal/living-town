@@ -69,7 +69,9 @@ export function MemoryGraph({ nodes, edges, focus, onPick, width = 360, height =
               : n.d.label === 'Event' ? <path d={`M0 ${-n.r - 2} L${n.r + 1} ${n.r} L${-n.r - 1} ${n.r} Z`} />
                 : n.d.label === 'Task' ? <rect x={-n.r} y={-n.r} width={n.r * 2} height={n.r * 2} rx="1" />
                   : <circle r={n.r} />}
-            {n.d.label === 'Self' && <text dy="4" textAnchor="middle">{n.d.name.split(' ').pop()!.slice(0, 1)}</text>}
+            {n.d.label === 'Self'
+              ? <text dy="4" textAnchor="middle">{n.d.name.split(' ').pop()!.slice(0, 1)}</text>
+              : <text className="mg-label" dy={n.r + 10} textAnchor="middle">{shortLabel(n.d)}</text>}
           </g>
         ))}
       </svg>
@@ -93,4 +95,12 @@ function tipTitle(n: MemNode) {
     case 'Self': return ''
     default: return `${n.label}: `
   }
+}
+
+function shortLabel(n: MemNode) {
+  const t = n.label === 'Event' ? (n.kind ?? n.name) : n.label === 'Task' ? n.name.split(' ')[0] : n.name
+  const words = t.replace(/^Captain |^Sister /, '').split(' ')
+  let out = ''
+  for (const w of words) { if ((out + ' ' + w).trim().length > 18) break; out = (out + ' ' + w).trim() }
+  return out || t.slice(0, 18)
 }

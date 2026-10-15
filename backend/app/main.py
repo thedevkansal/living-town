@@ -55,6 +55,9 @@ async def lifespan(app: FastAPI):
             pruned = await sim.prune_worlds()
             if pruned:
                 log.info("pruned stale worlds: %s", pruned)
+            if settings.demo_autocreate and not await store.exists(settings.demo_player):
+                await sim.create_world(settings.demo_player, "Traveller")
+                log.info("created demo world town:%s", settings.demo_player)
         except Exception:
             log.exception("prune failed")
     else:

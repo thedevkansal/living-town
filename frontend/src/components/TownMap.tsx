@@ -115,7 +115,7 @@ export function TownMap({ state, bubbles, pulses, ripples, selected, onSelect, o
 
           {/* social cliques (label propagation) as soft ground halos */}
           {communities && state.npcs.map((n) => spots[n.id] && (
-            <circle key={'c' + n.id} cx={spots[n.id].x} cy={spots[n.id].y} r="21" fill={COMM[(communities[n.id] ?? 0) % COMM.length]} opacity=".6" />
+            <circle key={'c' + n.id} cx={spots[n.id].x} cy={spots[n.id].y} r="27" fill={COMM[(communities[n.id] ?? 0) % COMM.length]} opacity=".8" />
           ))}
 
           {/* story tracker: TOLD edges of the focused fact, drawn between current positions */}

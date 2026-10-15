@@ -26,6 +26,7 @@ class Settings:
     # Free-tier guard: keep at most this many player worlds; the least recently active are deleted.
     max_worlds: int = int(os.getenv("MAX_WORLDS", "20"))
     demo_player: str = os.getenv("DEMO_PLAYER", "demo")
+    demo_autocreate: bool = os.getenv("DEMO_AUTOCREATE", "false").lower() in ("1", "true", "yes")
 
     @property
     def llm_enabled(self) -> bool:

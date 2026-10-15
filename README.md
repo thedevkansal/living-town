@@ -254,7 +254,8 @@ Full stack in containers (UI served by the backend): `docker compose --profile a
 | `FALKORDB_USERNAME` / `FALKORDB_PASSWORD` | unset | credentials (FalkorDB Cloud) |
 | `FALKORDB_TLS` | `false` | TLS to FalkorDB |
 | `MAX_WORLDS` | `20` | keep at most this many player graphs; the least recently active are deleted (keeps a free-tier instance small; a world is roughly 120 nodes and 300 edges) |
-| `DEMO_PLAYER` | `demo` | world that is never pruned |
+| `DEMO_PLAYER` | `demo` | world that is never pruned (join with the name `demo` to use it) |
+| `DEMO_AUTOCREATE` | `false` | create the demo world at startup if missing |
 | `ANTHROPIC_API_KEY` | unset | enables Claude dialogue |
 | `LLM_MODEL` / `LLM_EFFORT` | `claude-opus-5-5` / `low` | model and effort for dialogue |
 | `LLM_DISABLED` | `false` | force scripted mode |
