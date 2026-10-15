@@ -642,7 +642,8 @@ class NPCAgent:
             res = await self.rw(Q.TELL, **{"from": target}, to=self.id, fid=t["fact"], conf=0.95, accept=ACCEPT,
                                 hop=1, tick=self.tick, channel="testimony")
             if res:
-                evs.append({"type": "tell", "from": target, "to": self.id, "fact": t["fact"], "claim": t["note"],
+                claim = (await self.ro(Q.FACT_INFO, fid=t["fact"]))[0]["fact"].get("claim", t["note"])
+                evs.append({"type": "tell", "from": target, "to": self.id, "fact": t["fact"], "claim": claim,
                             "confidence": res[0]["confidence"], "stance": res[0]["stance"], "hop": res[0]["hop"],
                             "first_time": res[0]["first_time"], "channel": "testimony"})
                 evs.append({"type": "say", "npc": target, "text": "Aye, I saw it with my own eyes."})
@@ -670,7 +671,8 @@ class NPCAgent:
         res = await self.rw(Q.TELL, **{"from": self.id}, to=guard, fid=t["fact"], conf=conf, accept=ACCEPT,
                             hop=((mine or {}).get("hop") or 0) + 1, tick=self.tick, channel="report")
         await self.rw(Q.COMPLETE_TASK, tid=t["id"], tick=self.tick, result="Reported to the captain.", handoff=guard)
-        return [{"type": "tell", "from": self.id, "to": guard, "fact": t["fact"], "claim": t["note"],
+        claim = (await self.ro(Q.FACT_INFO, fid=t["fact"]))[0]["fact"].get("claim", t["note"])
+        return [{"type": "tell", "from": self.id, "to": guard, "fact": t["fact"], "claim": claim,
                  "confidence": res[0]["confidence"] if res else conf, "stance": res[0]["stance"] if res else "accepted",
                  "hop": res[0]["hop"] if res else 1, "first_time": res[0]["first_time"] if res else True,
                  "channel": "report"},
