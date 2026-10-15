@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import statistics
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import agent, sim
@@ -341,3 +344,9 @@ async def ws(websocket: WebSocket, player_id: str):
         pass
     finally:
         hub.subs.get(pid, set()).discard(websocket)
+
+
+# --------------------------------------------------------------------------- built UI (single-container deploys)
+_static = Path(os.getenv("STATIC_DIR") or Path(__file__).resolve().parent.parent / "static")
+if _static.is_dir():
+    app.mount("/", StaticFiles(directory=_static, html=True), name="ui")

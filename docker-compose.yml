@@ -9,5 +9,21 @@ services:
       - falkordb-data:/var/lib/falkordb/data
     restart: unless-stopped
 
+  # Full stack: `docker compose --profile app up -d --build`, then open http://localhost:8002
+  app:
+    profiles: ["app"]
+    build: .
+    container_name: living-town-app
+    depends_on: [falkordb]
+    environment:
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: "6379"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-opus-5-5}
+      MAX_WORLDS: ${MAX_WORLDS:-20}
+    ports:
+      - "8002:8002"
+    restart: unless-stopped
+
 volumes:
   falkordb-data:
