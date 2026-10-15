@@ -355,6 +355,7 @@ TASKS_OPEN = q("open_tasks", "read", "Open/claimed tasks on the shared board",
                          t.posted_tick AS posted_tick""")
 TASKS_ALL = q("all_tasks", "read", "Every task (for the board UI)",
               """MATCH (t:Task) OPTIONAL MATCH (t)-[:CONCERNS]->(f:Fact) OPTIONAL MATCH (t)-[:HANDED_TO]->(h:NPC)
+                 WITH t, collect(DISTINCT f)[0] AS f, collect(DISTINCT h)[0] AS h
                  RETURN t.id AS id, t.kind AS kind, t.status AS status, t.posted_by AS posted_by, t.claimed_by AS claimed_by,
                         t.target AS target, t.note AS note, t.result AS result, t.posted_tick AS posted_tick,
                         t.done_tick AS done_tick, f.claim AS claim, h.id AS handed_to ORDER BY t.posted_tick DESC LIMIT 30""")

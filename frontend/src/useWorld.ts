@@ -151,10 +151,14 @@ export function useWorld(pid: string | null) {
     }
   }, [addLog, addStory, nameOf, pulse, ripple, say])
 
+  const pending = useRef(0)
   const enqueue = useCallback((fn: () => Promise<void>) => {
-    queue.current = queue.current.then(fn).catch((err) => console.error(err))
+    pending.current += 1
+    queue.current = queue.current.then(fn).catch((err) => console.error(err)).finally(() => { pending.current -= 1 })
     return queue.current
   }, [])
+  // only resync from the server once the animation has caught up, so avatars never jump ahead of the story
+  const settle = useCallback(async () => { if (pending.current <= 1) await refresh() }, [refresh])
 
   // ---------------------------------------------------------------- stream
   useEffect(() => {
@@ -170,11 +174,11 @@ export function useWorld(pid: string | null) {
           whenRef.current = { tick: t.tick, day: t.day, slot: t.slot }
           await play(t.events)
           whenRef.current = null
-          await refresh()
+          await settle()
         })
       } else if (msg.type === 'action') {
         const events = (msg.events as SimEvent[]) ?? []
-        enqueue(async () => { await play(events); await refresh() })
+        enqueue(async () => { await play(events); await settle() })
       } else if (msg.type === 'say') {
         say(msg.npc as string, msg.text as string)
       } else if (msg.type === 'autoplay') {
@@ -184,7 +188,7 @@ export function useWorld(pid: string | null) {
       }
     })
     return stop
-  }, [pid, enqueue, play, refresh, say])
+  }, [pid, enqueue, play, refresh, settle, say])
 
   // spread of the focused story (who knows it, who hears next)
   useEffect(() => {

@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import type { Location, NPC, Provenance, WorldState } from '../api'
 import type { Bubble, Pulse, Ripple } from '../useWorld'
 import { Building } from './Buildings'
@@ -12,8 +12,8 @@ const LIGHT: Record<string, { tint: string; alpha: number; sky: string }> = {
   Morning: { tint: '#fff3c4', alpha: 0.1, sky: 'day' },
   Midday: { tint: '#ffffff', alpha: 0.0, sky: 'day' },
   Afternoon: { tint: '#ffd27a', alpha: 0.16, sky: 'day' },
-  Evening: { tint: '#e0703f', alpha: 0.32, sky: 'dusk' },
-  Night: { tint: '#1b2550', alpha: 0.58, sky: 'night' },
+  Evening: { tint: '#e0703f', alpha: 0.38, sky: 'dusk' },
+  Night: { tint: '#1b2550', alpha: 0.66, sky: 'night' },
 }
 
 const TREES: [number, number, number][] = [
@@ -74,7 +74,6 @@ interface Props {
 export function TownMap({ state, bubbles, pulses, ripples, selected, onSelect, onWalk, highlight, spread, communities, compact }: Props) {
   const spots = useMemo(() => layout(state), [state])
   const light = LIGHT[state.clock.slot] ?? LIGHT.Midday
-  const square = state.locations.find((l) => l.id === 'square')
   const npcById = useMemo(() => Object.fromEntries(state.npcs.map((n) => [n.id, n])), [state.npcs])
   const knows = useMemo(() => Object.fromEntries((spread?.who_knows ?? []).map((k) => [k.npc, k])), [spread])
   const next = useMemo(() => new Set((spread?.forecast ?? []).slice(0, 3).map((f) => f.npc)), [spread])
@@ -93,77 +92,44 @@ export function TownMap({ state, bubbles, pulses, ripples, selected, onSelect, o
   return (
     <div className={`map ${compact ? 'map--compact' : ''}`} data-sky={light.sky}>
       <div className="map__frame">
-        <svg viewBox={`0 0 ${W} ${H}`} className="map__svg" role="img" aria-label={`Map of ${state.clock.name}`}>
+        <BaseMap locations={state.locations} here={state.player.location} lit={light.sky === 'night' || light.sky === 'dusk'}
+          name={state.clock.name} onWalk={onWalk} />
+        <div className="map__light" style={{ background: light.tint, opacity: light.alpha }} />
+        <div className="map__paper" />
+
+        <svg viewBox={`0 0 ${W} ${H}`} className="map__svg map__over" aria-hidden>
           <defs>
-            <filter id="paper" x="0" y="0" width="100%" height="100%">
-              <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="4" result="n" />
-              <feColorMatrix type="saturate" values="0" />
-              <feComponentTransfer><feFuncA type="table" tableValues="0 0.07" /></feComponentTransfer>
-              <feBlend in="SourceGraphic" mode="multiply" />
-            </filter>
-            <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
-              <stop offset="60%" stopColor="#000" stopOpacity="0" />
-              <stop offset="100%" stopColor="#1a120d" stopOpacity="0.35" />
-            </radialGradient>
             <radialGradient id="lamp" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#ffd27a" stopOpacity="0.55" />
+              <stop offset="0%" stopColor="#ffd27a" stopOpacity="0.5" />
               <stop offset="100%" stopColor="#ffd27a" stopOpacity="0" />
             </radialGradient>
-            <pattern id="cobble" width="14" height="14" patternUnits="userSpaceOnUse">
-              <rect width="14" height="14" fill="#d8c59c" />
-              <path d="M0 7h14M7 0v7M3 7v7M11 7v7" stroke="#bea877" strokeWidth="1" opacity=".55" />
-            </pattern>
           </defs>
-
-          {/* ground */}
-          <rect width={W} height={H} fill="#a8c08a" />
-          <ellipse cx="520" cy="330" rx="420" ry="250" fill="#b4ca93" opacity=".6" />
-          {/* stream with a footbridge */}
-          <path d="M1000 250 C 930 280, 960 330, 900 360 S 760 470, 800 520 S 870 600, 840 640" fill="none" stroke="#7fb2c9" strokeWidth="26" strokeLinecap="round" opacity=".9" />
-          <path d="M1000 250 C 930 280, 960 330, 900 360 S 760 470, 800 520 S 870 600, 840 640" fill="none" stroke="#bfe0ea" strokeWidth="6" strokeDasharray="18 30" opacity=".7" />
-
-          {/* roads from the square */}
-          {square && state.locations.filter((l) => l.id !== 'square').map((l) => (
-            <g key={l.id}>
-              <path d={road(square, l)} fill="none" stroke="#b89d6c" strokeWidth="20" strokeLinecap="round" opacity=".55" />
-              <path d={road(square, l)} fill="none" stroke="url(#cobble)" strokeWidth="15" strokeLinecap="round" />
-            </g>
-          ))}
-          {square && <circle cx={square.x} cy={square.y} r="58" fill="url(#cobble)" stroke="#b89d6c" strokeWidth="5" />}
-          {square && <Well x={square.x} y={square.y} />}
-
-          {TREES.map(([x, y, r], i) => <Tree key={i} x={x} y={y} r={r} />)}
-
-          {/* buildings */}
-          {state.locations.map((l) => (
-            <g key={l.id} className={`bld ${state.player.location === l.id ? 'bld--here' : ''}`} onClick={() => onWalk(l.id)}
-              role="button" tabIndex={0} aria-label={`Walk to ${l.name}`}
-              onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onWalk(l.id)}>
-              {l.id !== 'square' && <Building kind={l.kind} x={l.x} y={l.y} lit={light.sky === 'night' || light.sky === 'dusk'} />}
-              <text x={l.x} y={l.id === 'square' ? l.y - 66 : l.y + 22} className="bld__label" textAnchor="middle">{l.name}</text>
-            </g>
-          ))}
-
-          {/* light of the hour */}
-          <rect width={W} height={H} fill={light.tint} opacity={light.alpha} className="map__light" pointerEvents="none" style={{ mixBlendMode: 'multiply' }} />
           {light.sky === 'night' && state.locations.filter((l) => l.id !== 'square').map((l) => (
-            <circle key={l.id} cx={l.x} cy={l.y - 6} r="70" fill="url(#lamp)" className="lamp" pointerEvents="none" />
+            <circle key={l.id} cx={l.x} cy={l.y - 6} r="70" fill="url(#lamp)" className="lamp" />
           ))}
-          <rect width={W} height={H} fill="url(#vignette)" pointerEvents="none" />
-          <rect width={W} height={H} filter="url(#paper)" fill="transparent" pointerEvents="none" />
+          {/* labels sit above the light so they stay legible at night; clicking walks there */}
+          {state.locations.map((l) => (
+            <text key={l.id} x={l.x} y={l.id === 'square' ? l.y - 66 : l.y + 22} textAnchor="middle" onClick={() => onWalk(l.id)}
+              className={`bld__label ${state.player.location === l.id ? 'bld__label--here' : ''}`}>{l.name}</text>
+          ))}
 
           {/* social cliques (label propagation) as soft ground halos */}
           {communities && state.npcs.map((n) => spots[n.id] && (
-            <circle key={'c' + n.id} cx={spots[n.id].x} cy={spots[n.id].y} r="21" fill={COMM[(communities[n.id] ?? 0) % COMM.length]} opacity=".55" />
+            <circle key={'c' + n.id} cx={spots[n.id].x} cy={spots[n.id].y} r="21" fill={COMM[(communities[n.id] ?? 0) % COMM.length]} opacity=".6" />
           ))}
 
           {/* story tracker: TOLD edges of the focused fact, drawn between current positions */}
-          {spread?.who_knows?.filter((k) => k.via && spots[k.npc] && spots[k.via]).map((k) => (
+          {!threadPath && spread?.who_knows?.filter((k) => k.via && spots[k.npc] && spots[k.via]).map((k) => (
             <path key={'t' + k.npc} d={arc(spots[k.via!], spots[k.npc])} className={`told told--${k.stance}`} />
           ))}
 
           {/* provenance: the red thread */}
-          {threadPath && <path key={threadIds.join('-')} d={threadPath} className="thread" />}
+          {threadPath && (
+            <g key={threadIds.join('-')}>
+              <path d={threadPath} className="thread thread--glow" />
+              <path d={threadPath} className="thread" />
+            </g>
+          )}
 
           {/* live gossip pulses */}
           {pulses.map((p) => {
@@ -173,7 +139,8 @@ export function TownMap({ state, bubbles, pulses, ripples, selected, onSelect, o
             return (
               <g key={p.id} className={`pulse ${p.doubted ? 'pulse--doubt' : ''}`} style={{ color: PULSE_COLOR[p.tone] }}>
                 <path d={d} className="pulse__trail" />
-                <circle r="7" className="pulse__spark"><animateMotion dur="1.1s" path={d} fill="freeze" calcMode="spline" keySplines="0.4 0 0.2 1" keyTimes="0;1" /></circle>
+                <circle r="9" className="pulse__glow"><animateMotion dur="1.1s" path={d} fill="freeze" calcMode="spline" keySplines="0.4 0 0.2 1" keyTimes="0;1" /></circle>
+                <circle r="5" className="pulse__spark"><animateMotion dur="1.1s" path={d} fill="freeze" calcMode="spline" keySplines="0.4 0 0.2 1" keyTimes="0;1" /></circle>
               </g>
             )
           })}
@@ -266,3 +233,47 @@ function Well({ x, y }: { x: number; y: number }) {
     </g>
   )
 }
+
+/** The painted town: drawn once per hour/location change, never during animations. */
+const BaseMap = memo(function BaseMap({ locations, here, lit, name, onWalk }: {
+  locations: Location[]; here: string; lit: boolean; name: string; onWalk: (loc: string) => void
+}) {
+  const square = locations.find((l) => l.id === 'square')
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="map__svg" role="img" aria-label={`Map of ${name}`}>
+      <defs>
+        <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
+          <stop offset="60%" stopColor="#000" stopOpacity="0" />
+          <stop offset="100%" stopColor="#1a120d" stopOpacity="0.35" />
+        </radialGradient>
+        <pattern id="cobble" width="14" height="14" patternUnits="userSpaceOnUse">
+          <rect width="14" height="14" fill="#d8c59c" />
+          <path d="M0 7h14M7 0v7M3 7v7M11 7v7" stroke="#bea877" strokeWidth="1" opacity=".55" />
+        </pattern>
+      </defs>
+      <rect width={W} height={H} fill="#a8c08a" />
+      <ellipse cx="520" cy="330" rx="420" ry="250" fill="#b4ca93" opacity=".6" />
+      <path d="M1000 250 C 930 280, 960 330, 900 360 S 760 470, 800 520 S 870 600, 840 640" fill="none" stroke="#7fb2c9" strokeWidth="26" strokeLinecap="round" opacity=".9" />
+      <path d="M1000 250 C 930 280, 960 330, 900 360 S 760 470, 800 520 S 870 600, 840 640" fill="none" stroke="#bfe0ea" strokeWidth="6" strokeDasharray="18 30" opacity=".7" />
+      {square && locations.filter((l) => l.id !== 'square').map((l) => (
+        <g key={l.id}>
+          <path d={road(square, l)} fill="none" stroke="#b89d6c" strokeWidth="20" strokeLinecap="round" opacity=".55" />
+          <path d={road(square, l)} fill="none" stroke="url(#cobble)" strokeWidth="15" strokeLinecap="round" />
+        </g>
+      ))}
+      {square && <circle cx={square.x} cy={square.y} r="58" fill="url(#cobble)" stroke="#b89d6c" strokeWidth="5" />}
+      {square && <Well x={square.x} y={square.y} />}
+      {TREES.map(([x, y, r], i) => <Tree key={i} x={x} y={y} r={r} />)}
+      {locations.map((l) => (
+        <g key={l.id} className={`bld ${here === l.id ? 'bld--here' : ''}`} onClick={() => onWalk(l.id)}
+          role="button" tabIndex={0} aria-label={`Walk to ${l.name}`}
+          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onWalk(l.id)}>
+          {l.id === 'square'
+            ? <circle cx={l.x} cy={l.y} r="58" fill="transparent" />
+            : <Building kind={l.kind} x={l.x} y={l.y} lit={lit} />}
+        </g>
+      ))}
+      <rect width={W} height={H} fill="url(#vignette)" pointerEvents="none" />
+    </svg>
+  )
+})

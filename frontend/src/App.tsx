@@ -103,6 +103,8 @@ function WorldPane({ joined, greetings, compact }: { joined: Joined; greetings?:
   const [showCliques, setShowCliques] = useState(false)
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   const [banner, setBanner] = useState(true)
+  const act = world.act
+  const walk = useCallback((loc: string) => { act({ action: 'move', location: loc }) }, [act])
 
   // greet the player from persistent memory once the town is drawn
   useEffect(() => {
@@ -128,7 +130,7 @@ function WorldPane({ joined, greetings, compact }: { joined: Joined; greetings?:
           <div className="banner" role="status">Welcome back. This is visit {joined.session}, and the town remembers what you did.</div>
         )}
         <TownMap state={world.state} bubbles={world.bubbles} pulses={world.pulses} ripples={world.ripples} selected={selected}
-          onSelect={(id) => setSelected(selected === id ? null : id)} onWalk={(loc) => world.act({ action: 'move', location: loc })}
+          onSelect={(id) => setSelected(selected === id ? null : id)} onWalk={walk}
           highlight={world.highlight} spread={world.spread} communities={showCliques ? analytics?.communities : null} compact={compact} />
         {world.toast && <Toast key={world.toast.id} text={world.toast.text} tone={world.toast.tone} />}
         {compact && selected && (
