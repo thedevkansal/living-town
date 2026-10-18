@@ -50,7 +50,9 @@ autoplay: dict[str, asyncio.Task] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    warm = None
     if await store.ping():
+        warm = asyncio.create_task(store.warmup())  # open the connection pool in the background
         try:
             pruned = await sim.prune_worlds()
             if pruned:
@@ -61,8 +63,10 @@ async def lifespan(app: FastAPI):
         except Exception:
             log.exception("prune failed")
     else:
-        log.warning("FalkorDB not reachable at %s:%s", settings.falkordb_host, settings.falkordb_port)
+        log.warning("FalkorDB not reachable")
     yield
+    if warm:
+        warm.cancel()
     for t in autoplay.values():
         t.cancel()
 
@@ -87,8 +91,10 @@ async def require_world(pid: str) -> None:
 # --------------------------------------------------------------------------- meta
 @app.get("/api/health")
 async def health():
-    return {"ok": await store.ping(), "mode": settings.mode, "model": settings.llm_model if settings.llm_enabled else None,
-            "falkordb": f"{settings.falkordb_host}:{settings.falkordb_port}", "max_worlds": settings.max_worlds}
+    """Liveness for the platform and the keep-alive cron. Pings FalkorDB so the cloud DB stays active too.
+    Deliberately reveals nothing about where the database lives."""
+    db = await store.ping()
+    return {"ok": db, "db": db, "mode": settings.mode, "llm": settings.llm_enabled}
 
 
 @app.get("/api/catalogue")

@@ -75,6 +75,37 @@ W_SKILLS = q("create_skills", "write", "Give NPCs procedures (KNOWS_HOW)",
              """UNWIND $rows AS r MATCH (n:NPC {id:r.npc}), (p:Procedure {id:r.proc})
                 CREATE (n)-[:KNOWS_HOW {proficiency:r.proficiency, learned_from:'upbringing', tick:0}]->(p)""")
 
+W_BUILD = q("build_world", "write",
+            "Create the whole town in one round trip: clock, places, agents, player, social graph, items, skills",
+            """CREATE (:Town {id:'town', name:$name, tick:0, seed:$seed, player_name:$player_name,
+                     created_at:$now, last_active:$now, sessions:0})
+               WITH count(*) AS _
+               UNWIND $locations AS r CREATE (:Location {id:r.id, name:r.name, kind:r.kind, x:r.x, y:r.y})
+               WITH count(*) AS _
+               UNWIND $npcs AS r MATCH (l:Location {id:r.start})
+               CREATE (n:NPC {id:r.id, name:r.name, role:r.role, personality:r.personality, chattiness:r.chattiness,
+                      credibility:r.credibility, color:r.color, schedule:r.schedule})-[:IS_AT]->(l)
+               WITH count(*) AS _
+               MATCH (sq:Location {id:'square'}) CREATE (p:Player {id:'player', name:$player_name})-[:IS_AT]->(sq)
+               WITH count(*) AS _
+               UNWIND $ties AS r MATCH (a:NPC {id:r.a}), (b:NPC {id:r.b})
+               CREATE (a)-[:KNOWS {trust:r.trust, affinity:r.affinity, bond:r.bond, distance:r.distance}]->(b)
+               FOREACH (_x IN CASE WHEN r.affinity >= 0.55 THEN [1] ELSE [] END | CREATE (a)-[:CLOSE]->(b))
+               WITH count(*) AS _
+               UNWIND $npc_items AS r MATCH (o:NPC {id:r.owner}), (l:Location {id:r.location})
+               CREATE (i:Item {id:r.id, name:r.name, value:r.value, original_owner:r.owner, stolen_unseen:false})
+               CREATE (i)-[:OWNED_BY]->(o) CREATE (i)-[:KEPT_AT]->(l)
+               WITH count(*) AS _
+               UNWIND $player_items AS r MATCH (p:Player)
+               CREATE (i:Item {id:r.id, name:r.name, value:r.value, original_owner:'player', stolen_unseen:false})
+               CREATE (i)-[:OWNED_BY]->(p)
+               WITH count(*) AS _
+               UNWIND $procedures AS r CREATE (:Procedure {id:r.id, name:r.name, steps:r.steps, teachable:r.teachable})
+               WITH count(*) AS _
+               UNWIND $skills AS r MATCH (n:NPC {id:r.npc}), (pr:Procedure {id:r.proc})
+               CREATE (n)-[:KNOWS_HOW {proficiency:r.proficiency, learned_from:'upbringing', tick:0}]->(pr)
+               RETURN count(*) AS skills""")
+
 # --------------------------------------------------------------------------- clock / sessions
 CLOCK = q("clock", "read", "Read the town clock", """MATCH (t:Town) RETURN t.tick AS tick, t.name AS name,
            t.player_name AS player_name, t.sessions AS sessions, t.seed AS seed""")
@@ -218,6 +249,101 @@ WHO_BELIEVES_AMONG = q("who_believes_among", "read", "Which of these NPCs alread
                        """MATCH (o:NPC)-[:BELIEVES]->(f:Fact) WHERE o.id IN $ids AND f.id IN $facts
                           RETURN o.id AS npc, f.id AS fact""")
 
+ADVANCE_AND_READ = q("advance_clock_read", "write", "Advance the clock and return what a tick needs to know",
+                     """MATCH (t:Town) SET t.tick = t.tick + 1, t.last_active = $now
+                        RETURN t.tick AS tick, t.seed AS seed, t.sessions AS sessions, t.player_name AS player_name""")
+TICK_SNAPSHOT = q("tick_snapshot", "read",
+                  "Shared state every agent plans from: where the player is, the task board, unseen thefts",
+                  """MATCH (p:Player)-[:IS_AT]->(pl:Location)
+                     OPTIONAL MATCH (t:Task)
+                     WITH pl, collect(t {.id, .kind, .status, .fact_id, .required, .posted_by, .claimed_by, .target,
+                                         .note}) AS tasks
+                     OPTIONAL MATCH (i:Item {stolen_unseen:true})-[:KEPT_AT]->(il:Location)
+                     RETURN pl.id AS player_loc, tasks,
+                            collect(CASE WHEN i IS NULL THEN NULL ELSE {item:i.id, item_name:i.name,
+                                    owner:i.original_owner, location:il.id} END) AS unseen""")
+PERCEIVE = q("perceive", "read",
+             "One agent's whole perception in a single read: company (with trust both ways and their skills), "
+             "salient beliefs (with which companions already hold them) and its own procedures",
+             """MATCH (me:NPC {id:$id})-[:IS_AT]->(l:Location)
+                OPTIONAL MATCH (l)<-[:IS_AT]-(o:NPC) WHERE o.id <> me.id
+                OPTIONAL MATCH (me)-[k:KNOWS]->(o)
+                OPTIONAL MATCH (o)-[k2:KNOWS]->(me)
+                WITH me, l, collect(CASE WHEN o IS NULL THEN NULL ELSE {id:o.id, role:o.role,
+                       affinity:coalesce(k.affinity, 0.1), trust_in_me:coalesce(k2.trust, 0.25),
+                       procs:[(o)-[:KNOWS_HOW]->(op:Procedure) | op.id]} END) AS company
+                OPTIONAL MATCH (l)<-[:IS_AT]-(pl:Player)
+                WITH me, l, company, count(pl) > 0 AS player_here
+                OPTIONAL MATCH (me)-[b:BELIEVES]->(f:Fact) WHERE b.stance = 'accepted' AND f.importance >= 0.2
+                WITH me, l, company, player_here, b, f ORDER BY f.importance * b.confidence DESC
+                WITH me, l, company, player_here,
+                     collect(CASE WHEN f IS NULL THEN NULL ELSE {fact:f.id, claim:f.claim, importance:f.importance,
+                       kind:f.kind, predicate:f.predicate, subject:f.subject, object_name:f.object_name,
+                       confidence:b.confidence, hop:b.hop, since:b.since_tick,
+                       holders:[(h:NPC)-[:BELIEVES]->(f) | h.id]} END) AS beliefs
+                RETURN l.id AS location, company, player_here, beliefs[0..10] AS beliefs,
+                       [(me)-[kh:KNOWS_HOW]->(p:Procedure) | {id:p.id, name:p.name, proficiency:kh.proficiency,
+                         teachable:p.teachable}] AS procs""")
+TELL_RESOLVED = q("tell_and_settle", "write",
+                  "Gossip handoff in one statement: belief + provenance edge + promotion of corroborated doubts; "
+                  "reports whether the fact is contested",
+                  """MATCH (a:NPC {id:$from})-[:BELIEVES]->(f:Fact {id:$fid}), (b:NPC {id:$to})
+                     MERGE (b)-[bel:BELIEVES]->(f)
+                     ON CREATE SET bel.confidence=$conf, bel.stance = CASE WHEN $conf >= $accept THEN 'accepted' ELSE 'doubted' END,
+                         bel.hop=$hop, bel.via=$from, bel.since_tick=$tick, bel.source='told', bel.corroborations=0
+                     ON MATCH SET bel.confidence = CASE WHEN bel.source = 'witnessed' THEN bel.confidence
+                             ELSE bel.confidence + (1.0 - bel.confidence) * $conf * 0.5 END,
+                         bel.corroborations = coalesce(bel.corroborations, 0) + 1
+                     MERGE (a)-[t:TOLD {fact_id:$fid}]->(b)
+                     ON CREATE SET t.tick=$tick, t.confidence=$conf, t.times=1, t.channel=$channel
+                     ON MATCH SET t.times = t.times + 1
+                     SET t.primary = coalesce(t.primary, false) OR coalesce(bel.via = $from, false),
+                         bel.stance = CASE WHEN bel.stance = 'doubted' AND bel.confidence >= $accept THEN 'accepted'
+                                      ELSE bel.stance END
+                     WITH bel, f OPTIONAL MATCH (f)-[:CONTRADICTS]-(g:Fact)
+                     RETURN bel.confidence AS confidence, bel.stance AS stance, bel.hop AS hop,
+                            coalesce(bel.via = $from AND bel.since_tick = $tick, false) AS first_time,
+                            count(g) > 0 AS contested""")
+CLAIM_AND_TRACE = q("claim_and_trace", "write",
+                    "Atomic claim of an investigation that also traces the story to its first eyewitness",
+                    """MATCH (t:Task {id:$tid}) WHERE t.status = 'open'
+                       MATCH (n:NPC {id:$npc})-[:KNOWS_HOW]->(p:Procedure) WHERE p.id = t.required
+                       SET t.status = 'claimed', t.claimed_tick = $tick, t.claimed_by = $npc
+                       CREATE (t)-[:CLAIMED_BY]->(n)
+                       WITH t
+                       OPTIONAL MATCH (w:NPC)-[x:WITNESSED]->(:Event)<-[:DERIVED_FROM]-(:Fact {id:t.fact_id})
+                       WITH t, w, x ORDER BY x.tick, w.id LIMIT 1
+                       FOREACH (_x IN CASE WHEN w IS NULL THEN [] ELSE [1] END |
+                         SET t.target = w.id, t.note = 'Story traced back to eyewitness ' + w.name
+                         MERGE (t)-[:FOUND]->(w))
+                       RETURN t.id AS id, w.id AS witness, w.name AS witness_name""")
+DEED = q("record_deed", "write", "Episodic Event and the semantic Fact derived from it, in one statement",
+         """MATCH (l:Location {id:$loc}) OPTIONAL MATCH (s:Session {n:$session})
+            CREATE (e:Event {id:$eid, tick:$tick, day:$day, slot:$slot, kind:$kind, summary:$summary,
+                    session:$session})-[:AT]->(l)
+            FOREACH (_x IN CASE WHEN s IS NULL THEN [] ELSE [1] END | CREATE (e)-[:DURING]->(s))
+            MERGE (f:Fact {id:$fid})
+            ON CREATE SET f.subject=$subject, f.subject_name=$subject_name, f.predicate=$predicate,
+                f.object=$object, f.object_name=$object_name, f.claim=$claim, f.truth=$truth,
+                f.importance=$importance, f.valence=$valence, f.kind=$fkind, f.created_tick=$tick
+            MERGE (f)-[:DERIVED_FROM]->(e)
+            RETURN e.id AS event, f.id AS fact""")
+WITNESS_BELIEVE = q("witness_and_believe", "write", "Witnesses form the episodic memory and believe the derived Fact",
+                    """UNWIND $ids AS wid MATCH (n:NPC {id:wid}), (e:Event {id:$eid}), (f:Fact {id:$fid})
+                       CREATE (n)-[:WITNESSED {tick:$tick, vividness:1.0}]->(e)
+                       MERGE (n)-[b:BELIEVES]->(f)
+                       ON CREATE SET b.confidence=$conf, b.stance='accepted', b.hop=0, b.via=null, b.since_tick=$tick,
+                           b.source='witnessed', b.corroborations=0
+                       ON MATCH SET b.confidence=$conf, b.stance='accepted', b.hop=0, b.source='witnessed'
+                       RETURN count(b) AS n""")
+ACT_CONTEXT = q("act_context", "read", "Everything a player action needs in one read",
+                """MATCH (t:Town), (p:Player)-[:IS_AT]->(l:Location)
+                   OPTIONAL MATCH (l)<-[:IS_AT]-(n:NPC)
+                   WITH t, p, l, collect(n.id) AS present
+                   OPTIONAL MATCH (i:Item)-[:OWNED_BY]->(p)
+                   RETURN t.tick AS tick, t.sessions AS sessions, p.name AS name, l.id AS location, present,
+                          collect(CASE WHEN i IS NULL THEN NULL ELSE {id:i.id, name:i.name} END) AS items""")
+
 # --------------------------------------------------------------------------- memory tools (catalogue for agents)
 RECALL_ABOUT = q("recall_about", "read", "What an NPC believes about an entity (with stance, confidence, source)",
                  """MATCH (me:NPC {id:$npc})-[b:BELIEVES]->(f:Fact)-[:ABOUT]->(x) WHERE x.id = $entity
@@ -329,6 +455,7 @@ POST_TASK = q("post_task", "write", "Post a Task on the shared board (idempotent
                  ON CREATE SET t.kind=$kind, t.status=$status, t.fact_id=$fid, t.posted_tick=$tick, t.required=$required,
                      t.target=$target, t.note=$note, t.posted_by=$by, t.claimed_by=$claimed_by
                  MERGE (t)-[:POSTED_BY]->(n) MERGE (t)-[:CONCERNS]->(f)
+                 FOREACH (_x IN CASE WHEN $claimed_by IS NULL THEN [] ELSE [1] END | MERGE (t)-[:CLAIMED_BY]->(n))
                  RETURN t.posted_tick = $tick AND t.posted_by = $by AS created, t.status AS status""")
 SELF_ASSIGN = q("self_assign", "write", "Poster assigns a task to itself",
                 """MATCH (t:Task {id:$tid}), (n:NPC {id:$npc}) MERGE (t)-[:CLAIMED_BY]->(n)""")
