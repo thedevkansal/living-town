@@ -234,7 +234,7 @@ main { min-height: 0; }
   font: 400 calc(var(--size) * 0.55)/1 var(--display);
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
   box-shadow: 0 3px 6px rgba(30, 20, 10, 0.4);
-  transition: left 1s cubic-bezier(.45, .05, .3, 1), top 1s cubic-bezier(.45, .05, .3, 1), box-shadow 0.4s, scale 0.2s;
+  transition: left 0.7s cubic-bezier(.45, .05, .3, 1), top 0.7s cubic-bezier(.45, .05, .3, 1), box-shadow 0.4s, scale 0.2s;
   pointer-events: auto; padding: 0;
 }
 .avatar:hover { scale: 1.12; z-index: 3; }
@@ -271,8 +271,11 @@ main { min-height: 0; }
 .ripple--task { border-color: var(--plum); }
 @keyframes ripple { from { scale: 1; opacity: 1; } to { scale: 2.6; opacity: 0; } }
 
+/* bubbles live inside an anchor that glides exactly like the avatars, so a line never leaves its speaker behind */
+.anchor { position: absolute; width: 0; height: 0; z-index: 6; pointer-events: none;
+  transition: left 0.7s cubic-bezier(.45, .05, .3, 1), top 0.7s cubic-bezier(.45, .05, .3, 1); }
 .bubble {
-  position: absolute; z-index: 6;
+  position: absolute; left: 0; top: 0; z-index: 6;
   translate: -50% calc(-100% - max(20px, 2.3cqw) - var(--stack, 0) * max(44px, 4.4cqw));
   width: max-content; max-width: max(170px, 19cqw);
   background: var(--paper); color: var(--paper-ink);

@@ -44,11 +44,33 @@ export function useWorld(pid: string | null) {
     if (s.metrics.tick_ms) setMetrics(s.metrics)
   }, [pid])
 
+  // Speech bubbles: at most two at once per place; the rest wait their turn (a short queue per place).
+  const shown = useRef<Bubble[]>([])
+  const waiting = useRef<Bubble[]>([])
+  const placeOf = useCallback((npc: string) => (npc === 'player'
+    ? stateRef.current?.player.location
+    : stateRef.current?.npcs.find((n) => n.id === npc)?.location), [])
+  const showBubble = useCallback((b: Bubble) => {
+    shown.current = [...shown.current.filter((x) => x.npc !== b.npc), b]
+    setBubbles(shown.current)
+    window.setTimeout(() => {
+      shown.current = shown.current.filter((x) => x.id !== b.id)
+      setBubbles(shown.current)
+      // let the next queued speaker at a free place talk
+      const next = waiting.current.find((w) => shown.current.filter((x) => placeOf(x.npc) === placeOf(w.npc)).length < 2)
+      if (next) { waiting.current = waiting.current.filter((w) => w.id !== next.id); showBubble(next) }
+    }, b.long ? 7000 : 3300)
+  }, [placeOf])
   const say = useCallback((npc: string, text: string, long?: boolean) => {
     const b = { id: nid(), npc, text, long }
-    setBubbles((bs) => [...bs.filter((x) => x.npc !== npc), b])
-    setTimeout(() => setBubbles((bs) => bs.filter((x) => x.id !== b.id)), long ? 8000 : 4200)
-  }, [])
+    const place = placeOf(npc)
+    const busy = shown.current.filter((x) => x.npc !== npc && placeOf(x.npc) === place).length
+    if (busy < 2 || long) { showBubble(b); return }
+    // queue (newest wins if a place is very chatty)
+    const samePlace = waiting.current.filter((w) => placeOf(w.npc) === place)
+    if (samePlace.length >= 2) waiting.current = waiting.current.filter((w) => w.id !== samePlace[0].id)
+    waiting.current = [...waiting.current.filter((w) => w.npc !== npc), b]
+  }, [placeOf, showBubble])
   const pulse = useCallback((p: Omit<Pulse, 'id'>) => {
     const x = { ...p, id: nid() }
     setPulses((ps) => [...ps, x])
@@ -69,7 +91,9 @@ export function useWorld(pid: string | null) {
 
   // ---------------------------------------------------------------- event choreography
   const play = useCallback(async (events: SimEvent[]) => {
-    const step = reduced ? 60 : 340
+    // pacing: a whole day should play out in ~10 s, however busy the town is
+    const paced = events.filter((e) => e.type === 'deed' || e.type === 'tell' || e.type === 'task_posted' || e.type === 'teach').length
+    const step = reduced ? 40 : Math.min(240, Math.round(1100 / Math.max(1, paced)))
     // moves first so avatars glide together
     const moves = events.filter((e) => e.type === 'move') as Extract<SimEvent, { type: 'move' }>[]
     if (moves.length) {
@@ -77,7 +101,7 @@ export function useWorld(pid: string | null) {
       for (const m of moves.filter((m) => m.reason)) {
         addLog({ tone: 'task', npc: m.npc, text: `${nameOf(m.npc)} heads to ${locName(stateRef.current, m.to)} to ${m.reason === 'confront' ? 'find you' : m.reason === 'report' ? 'report a crime' : 'question a witness'}.` })
       }
-      await wait(reduced ? 100 : 1050)
+      await wait(reduced ? 100 : 720)
     }
     for (const e of events) {
       switch (e.type) {
@@ -214,7 +238,7 @@ export function useWorld(pid: string | null) {
     setBusy(true)
     try {
       if (kind === 'tick') await api.tick(pid, 1)
-      else await api.advanceDay(pid, reduced ? 0.3 : 1.9)
+      else await api.advanceDay(pid, reduced ? 0.3 : 0.9)
       await queue.current
     } catch (e) { notify((e as Error).message, 'err') }
     finally { setBusy(false) }

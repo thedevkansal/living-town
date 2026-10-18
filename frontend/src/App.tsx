@@ -15,13 +15,13 @@ const store = {
 interface Joined { pid: string; name: string; returning: boolean; session: number }
 
 export default function App() {
-  const [health, setHealth] = useState<{ ok: boolean; mode: string; model: string | null } | null>(null)
+  const [health, setHealth] = useState<{ ok: boolean; mode: string } | null>(null)
   const [primary, setPrimary] = useState<Joined | null>(null)
   const [second, setSecond] = useState<Joined | null>(null)
   const [split, setSplit] = useState(false)
   const [greet, setGreet] = useState<Record<string, { npc: string; text: string }[]>>({})
 
-  useEffect(() => { api.health().then(setHealth).catch(() => setHealth({ ok: false, mode: 'offline', model: null })) }, [])
+  useEffect(() => { api.health().then(setHealth).catch(() => setHealth({ ok: false, mode: 'offline' })) }, [])
 
   const join = useCallback(async (name: string, reset = false): Promise<Joined> => {
     const pid = slug(name)
@@ -73,13 +73,13 @@ function JoinScreen({ health, onJoin }: { health: { ok: boolean; mode: string } 
         <p className="join__hint">Use the same name next time and the town will remember you. Each name gets its own isolated world.</p>
         {remembered && slug(remembered) === slug(name) && <button className="link" onClick={() => go(true)} disabled={busy}>Start {name}'s world over</button>}
         {err && <p className="err">{err}</p>}
-        {health?.ok === false && <p className="err">The backend at :8002 is not reachable. Start it with <code>uv run uvicorn app.main:app --port 8002</code>.</p>}
+        {health?.ok === false && <p className="err">The town's memory store is not reachable right now. Try again in a moment (locally: start FalkorDB and <code>uv run uvicorn app.main:app --port 8002</code>).</p>}
       </div>
     </div>
   )
 }
 
-function TopBar({ health, split, onSplit, onLeave }: { health: { ok: boolean; mode: string; model: string | null } | null; split: boolean; onSplit: () => void; onLeave: () => void }) {
+function TopBar({ health, split, onSplit, onLeave }: { health: { ok: boolean; mode: string } | null; split: boolean; onSplit: () => void; onLeave: () => void }) {
   return (
     <header className="top">
       <div className="top__brand">
@@ -88,7 +88,7 @@ function TopBar({ health, split, onSplit, onLeave }: { health: { ok: boolean; mo
       </div>
       <div className="top__right">
         <span className={`badge badge--${health?.mode ?? 'scripted'}`} title={health?.mode === 'llm' ? 'NPC dialogue uses Claude with a fixed tool catalogue' : 'No ANTHROPIC_API_KEY: deterministic agents and templated replies from graph memory'}>
-          {health?.mode === 'llm' ? `Claude ${health.model}` : 'Scripted agents'}
+          {health?.mode === 'llm' ? 'Claude dialogue' : 'Scripted agents'}
         </span>
         <button className={`btn btn--toggle ${split ? 'is-on' : ''}`} onClick={onSplit} aria-pressed={split}>{split ? 'One world' : 'Two players side by side'}</button>
         <button className="btn btn--quiet" onClick={onLeave}>Switch player</button>

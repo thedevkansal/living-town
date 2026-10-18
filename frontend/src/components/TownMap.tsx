@@ -157,16 +157,23 @@ export function TownMap({ state, bubbles, pulses, ripples, selected, onSelect, o
               knows={knows[n.id]} next={next.has(n.id)} inThread={chain.includes(n.id)}
               ripples={ripples.filter((r) => r.npc === n.id)} />
           ))}
-          {bubbles.map((b) => {
-            const s = b.npc === 'player' ? spots.player : spots[b.npc]
+          {/* one persistent anchor per speaker, gliding exactly like its avatar, so a line never leaves its speaker */}
+          {['player', ...state.npcs.map((n) => n.id)].map((id) => {
+            const s = spots[id]
+            const b = bubbles.find((x) => x.npc === id)
             if (!s) return null
-            const n = npcById[b.npc]
-            const near = bubbles.filter((o) => { const t = o.npc === 'player' ? spots.player : spots[o.npc]; return t && Math.abs(t.y - s.y) < 60 && Math.abs(t.x - s.x) < 240 })
-            const stack = near.findIndex((o) => o.id === b.id)
+            // stack neighbours bottom-up: short lines first, long (multi-line) ones on top so they grow into free space
+            const near = bubbles.filter((o) => { const t = spots[o.npc]; return t && Math.abs(t.y - s.y) < 60 && Math.abs(t.x - s.x) < 240 })
+              .sort((x, y) => Number(!!x.long) - Number(!!y.long) || x.id - y.id)
+            const stack = b ? near.findIndex((o) => o.id === b.id) : 0
             return (
-              <div key={b.id} className={`bubble ${b.long ? 'bubble--long' : ''} ${s.x > 760 ? 'bubble--left' : s.x < 200 ? 'bubble--right' : ''}`}
-                style={{ ...pos(s), ['--stack' as string]: stack }}>
-                <b>{n?.name ?? 'You'}</b> {b.text}
+              <div key={'anchor-' + id} className="anchor" style={pos(s)}>
+                {b && (
+                  <div key={b.id} className={`bubble ${b.long ? 'bubble--long' : ''} ${s.x > 760 ? 'bubble--left' : s.x < 200 ? 'bubble--right' : ''}`}
+                    style={{ ['--stack' as string]: stack }}>
+                    <b>{npcById[id]?.name ?? 'You'}</b> {b.text}
+                  </div>
+                )}
               </div>
             )
           })}

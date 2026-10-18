@@ -116,7 +116,7 @@ const post = <T,>(path: string, body?: unknown) =>
   call<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
 
 export const api = {
-  health: () => call<{ ok: boolean; mode: string; model: string | null }>('/health'),
+  health: () => call<{ ok: boolean; db: boolean; mode: string; llm: boolean }>('/health'),
   join: (player_id: string, name: string, reset = false) => post<Joined>('/worlds', { player_id, name, reset }),
   reset: (pid: string) => post<{ session: number; state: WorldState }>(`/worlds/${pid}/reset`),
   state: (pid: string) => call<WorldState>(`/worlds/${pid}`),
