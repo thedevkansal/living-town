@@ -1,0 +1,21 @@
+# Render Blueprint: New > Blueprint > pick this repo. Fill the secret values when prompted.
+services:
+  - type: web
+    name: living-town
+    runtime: docker
+    plan: free
+    region: singapore          # nearest Render region to the FalkorDB Cloud instance (ap-south-1)
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: FALKORDB_HOST
+        sync: false
+      - key: FALKORDB_PORT
+        sync: false
+      - key: FALKORDB_USERNAME
+        sync: false
+      - key: FALKORDB_PASSWORD
+        sync: false
+      - key: ANTHROPIC_API_KEY   # optional: leave empty for the scripted (no-LLM) mode
+        sync: false

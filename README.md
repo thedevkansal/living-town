@@ -260,6 +260,21 @@ Full stack in containers (UI served by the backend): `docker compose --profile a
 | `LLM_MODEL` / `LLM_EFFORT` | `claude-opus-5-5` / `low` | model and effort for dialogue |
 | `LLM_DISABLED` | `false` | force scripted mode |
 
+## Deploy
+
+
+The root `Dockerfile` builds the React UI and serves it from FastAPI on `$PORT`
+(UI at `/`, API at `/api`). `render.yaml` is a Render Blueprint: **New > Blueprint >
+this repo**, then fill `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_USERNAME`,
+`FALKORDB_PASSWORD` (and optionally `ANTHROPIC_API_KEY`). Any Docker host works the same way:
+
+```bash
+docker build -t living-town .
+docker run --env-file .env -e PORT=10000 -p 10000:10000 living-town
+```
+
+Free-tier note: on startup the backend prunes the least recently active `town:*` worlds beyond `MAX_WORLDS`, and it starts even if FalkorDB is briefly unreachable.
+
 ## API
 
 | Method | Path | |

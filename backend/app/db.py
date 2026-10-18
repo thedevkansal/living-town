@@ -54,8 +54,17 @@ class Store:
             kwargs["password"] = settings.falkordb_password
         if settings.falkordb_tls:
             kwargs["ssl"] = True
-        self.db = FalkorDB(**kwargs)
+        # Connect lazily: the FalkorDB client touches the server on construction,
+        # and an unreachable DB at import time would crash the whole app.
+        self._kwargs = kwargs
+        self._db: FalkorDB | None = None
         self.stats: dict[str, TenantStats] = defaultdict(TenantStats)
+
+    @property
+    def db(self) -> FalkorDB:
+        if self._db is None:
+            self._db = FalkorDB(**self._kwargs)
+        return self._db
 
     def graph(self, player_id: str):
         return self.db.select_graph(graph_name(player_id))
