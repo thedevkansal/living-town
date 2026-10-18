@@ -69,7 +69,7 @@ Most agent-memory layers model what *one* agent knows. Living Town models how kn
 | How knowledge moves | copied | travels along `KNOWS` edges as `TOLD` edges, one hop at a time |
 | Provenance | a source field | a queryable path back to the eyewitness, returned to the user |
 | Certainty | static | decays per hop (listener trust x 0.9) and overnight |
-| Conflicts | last write wins | contradicting claims coexist; the trust-weighted one is accepted, the other doubted |
+| Conflicts | last write wins | contradicting claims coexist; the highest-confidence claim among all rivals is accepted, every other one is doubted |
 | Coordination | message passing | shared task board in the graph with atomic claims and handoffs |
 | Tenancy | filter on a column | one FalkorDB graph per player: `town:{player_id}` |
 
@@ -213,8 +213,8 @@ SET t.primary = coalesce(t.primary, false) OR coalesce(bel.via = $from, false)
 
 // who_told_me: provenance path back to the eyewitness
 MATCH (me:NPC {id:$npc})-[b:BELIEVES]->(f:Fact {id:$fid})
-OPTIONAL MATCH chain = (src)-[:TOLD*0..10]->(me)
-  WHERE all(r IN relationships(chain) WHERE r.fact_id = $fid AND r.primary = true)
+// the edge filter is applied while expanding, so cost stays flat as gossip piles up
+OPTIONAL MATCH chain = (src)-[:TOLD*0..10 {fact_id:$fid, primary:true}]->(me)
 WITH me, b, f, chain ORDER BY length(chain) DESC LIMIT 1
 OPTIONAL MATCH (nodes(chain)[0])-[w:WITNESSED]->(e:Event)<-[:DERIVED_FROM]-(f) ...
 
@@ -298,8 +298,11 @@ Full stack in containers (UI served by the backend): `docker compose --profile a
 | `FALKORDB_HOST` / `FALKORDB_PORT` | `localhost` / `6381` | FalkorDB endpoint |
 | `FALKORDB_USERNAME` / `FALKORDB_PASSWORD` | unset | credentials (FalkorDB Cloud) |
 | `FALKORDB_TLS` | `false` | TLS to FalkorDB |
-| `MAX_WORLDS` | `20` | keep at most this many player graphs; the least recently active are deleted (keeps a free-tier instance small; a world is roughly 120 nodes and 300 edges) |
-| `DEMO_PLAYER` | `demo` | world that is never pruned (join with the name `demo` to use it) |
+| `MAX_WORLDS` | `20` | soft cap on player graphs: beyond it the least recently active are deleted, but never one used in the last `PRUNE_IDLE_MINUTES`; stress-test worlds do not count (a world is roughly 120 nodes and 300 edges) |
+| `PRUNE_IDLE_MINUTES` | `30` | worlds active this recently are never pruned |
+| `MAX_WORLDS_HARD` | `40` | hard cap: past it, new worlds are refused (503) if pruning cannot free a slot |
+| `ADMIN_TOKEN` | unset | enables listing and deleting worlds via the `X-Admin-Token` header; both endpoints are disabled when unset |
+| `DEMO_PLAYER` | `demo` | world that is never pruned or reset (join with the name `demo` to use it) |
 | `DEMO_AUTOCREATE` | `false` | create the demo world at startup if missing |
 | `ANTHROPIC_API_KEY` | unset | enables Claude dialogue |
 | `LLM_MODEL` / `LLM_EFFORT` | `claude-opus-5-5` / `low` | model and effort for dialogue |
@@ -319,7 +322,7 @@ docker build -t living-town .
 docker run --env-file .env -e PORT=10000 -p 10000:10000 living-town
 ```
 
-Free-tier notes: the backend prunes the least recently active `town:*` worlds beyond `MAX_WORLDS`, starts even if FalkorDB is briefly unreachable, and on Render pings its own public URL every 10 minutes (plus a GitHub Actions keep-alive) so neither the app nor the database goes to sleep.
+Free-tier notes: the backend prunes idle `town:*` worlds beyond `MAX_WORLDS`, caps input sizes and stress-test runs, starts even if FalkorDB is briefly unreachable, and on Render pings its own public URL every 10 minutes (plus a GitHub Actions keep-alive) so neither the app nor the database goes to sleep.
 
 <details>
 <summary><b>HTTP API</b></summary>
@@ -329,12 +332,12 @@ Free-tier notes: the backend prunes the least recently active `town:*` worlds be
 | POST | `/api/worlds` `{player_id, name, reset}` | create or rejoin a world, start a session, get greetings |
 | POST | `/api/worlds/{pid}/act` `{action, npc, item, location, subject, message}` | move, steal, gift, help, trade, lie, talk |
 | POST | `/api/worlds/{pid}/tick?n=1` and `/advance-day?delay=` | run ticks (events also streamed) |
-| POST | `/api/worlds/{pid}/autoplay` `{on, interval}` | server-side auto-play |
+| POST | `/api/worlds/{pid}/autoplay` `{on, interval}` | server-side auto-play; stops itself when nobody is watching or after 30 minutes |
 | POST | `/api/worlds/{pid}/npcs/{npc}/talk` `{message}` | dialogue |
 | GET | `/api/worlds/{pid}/npcs/{npc}/memory` | memory subgraph for the inspector |
 | GET | `/api/worlds/{pid}/provenance?npc=&fact=` | provenance path, who knows, forecast |
 | GET | `/api/worlds/{pid}/analytics` | graph algorithms |
-| POST | `/api/bench` `{tenants, ticks}` | concurrency stress test across isolated worlds |
+| POST | `/api/bench` `{tenants, ticks}` | concurrency stress test across isolated worlds; one run at a time (429 otherwise), worlds deleted afterwards |
 | WS | `/ws/{pid}` | live tick and action events |
 
 </details>
