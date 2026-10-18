@@ -124,8 +124,15 @@ export function useWorld(pid: string | null) {
           setTimeout(() => ripple(e.to, e.stance === 'doubted' ? 'doubt' : 'learn'), reduced ? 0 : 900)
           addStory(e.fact, e.claim, 'told')
           const verb = e.channel === 'report' ? 'reports to' : e.channel === 'testimony' ? 'gives testimony to' : e.channel === 'findings' ? 'hands findings to' : 'tells'
+          // Testimony is always taken from the eyewitness: show the speaker's certainty, then where the
+          // listener's belief now stands (the listener may already have heard it as hearsay, so their
+          // hop count stays on the chain they first heard it through).
+          const eyewitness = e.channel === 'testimony'
+          const outcome = e.stance === 'doubted'
+            ? `${nameOf(e.to)} doubts it, ${pct(e.confidence)}`
+            : eyewitness ? `${nameOf(e.to)} now ${pct(e.confidence)} sure` : `${pct(e.confidence)} sure, hop ${e.hop}`
           addLog({ tone: e.channel ?? 'gossip', fact: e.fact, npc: e.to,
-            text: `${nameOf(e.from)} ${verb} ${nameOf(e.to)}: "${e.claim}" ${e.stance === 'doubted' ? `(${nameOf(e.to)} doubts it, ${pct(e.confidence)})` : `(${pct(e.confidence)} sure, hop ${e.hop})`}` })
+            text: `${nameOf(e.from)} ${verb} ${nameOf(e.to)}: "${e.claim}" (${eyewitness ? `eyewitness, 100% sure; ${outcome}` : outcome})` })
           await wait(step)
           break
         }
