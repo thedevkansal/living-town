@@ -7,7 +7,7 @@
 Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs x FalkorDB).
 **Tracks:** Agent Memory and Coordination (primary) · Agents That Act on Connected Data.
 
-> The live demo runs on Render's free tier: the first visit after ~15 idle minutes takes about a minute to wake up.
+> The live demo runs on free tiers (Render + FalkorDB Cloud) and pings itself to stay awake. If it was idle anyway, the first load can take about a minute.
 
 ![Captain Oswin explains how he knows: the provenance thread runs from the theft through Bram and Mira to him, drawn across the map, with his memory graph on the right](docs/media/provenance.png)
 
@@ -27,14 +27,6 @@ Ask Sister Agnes the same thing and she says *"Silver hammer? Nothing in my memo
 
 ![Day 2, dawn: Captain Oswin, who never saw the theft, confronts the player at the Forge while the town talk log shows how the story travelled](docs/media/confront.png)
 
-## Try it in two minutes (live site)
-
-1. Open the [live demo](https://living-town.onrender.com), type a name, press **Enter the town**.
-2. Click **The Forge**, then **Steal the silver hammer**.
-3. Press **Live through the day** and watch the **Town talk** log: Bram tells Mira, Mira tells Captain Oswin, Oswin posts an investigation, Finn claims it, and at dawn Oswin confronts you.
-4. Open **Captain Oswin's memory** and press **Why do you believe that?** A red thread draws the provenance path across the map.
-5. Press **Two players side by side**: the second player's world is a separate graph where nobody has heard of any hammer.
-
 ## How it covers the tracks
 
 **Agent Memory and Coordination**
@@ -43,25 +35,33 @@ Ask Sister Agnes the same thing and she says *"Silver hammer? Nothing in my memo
 |---|---|---|
 | Episodic memory | `(:NPC)-[:WITNESSED]->(:Event)-[:AT]->(:Location)` | Bram's memory: the theft he saw, with time and place |
 | Semantic memory | `(:NPC)-[:BELIEVES {confidence, stance, hop, via}]->(:Fact)` | Oswin accepts the story at 44%; Rowan doubts it at 19% |
-| Procedural memory | `(:NPC)-[:KNOWS_HOW {proficiency, learned_from}]->(:Procedure)` | Only Finn knows how to investigate; NPCs teach each other skills |
+| Procedural memory | `(:NPC)-[:KNOWS_HOW {proficiency, learned_from}]->(:Procedure)` | The deputy claims the investigation because he `KNOWS_HOW` to investigate; NPCs teach each other skills |
 | Persistent history across sessions | `(:Player)-[:HAD_SESSION]->(:Session)<-[:DURING]-(:Event)` | Return under the same name and townsfolk greet you from memory |
 | Shared state and handoffs | `(:Task)` with `POSTED_BY`, `CLAIMED_BY`, `HANDED_TO`, `FOUND` | Oswin posts, Finn claims atomically, findings are handed back |
-| High-concurrency reads and writes | all 10 agents run each tick phase concurrently against one graph | **Graph insights > Run the stress test**: 40 agents in 4 worlds, writes per second |
-| Separate memory per user or tenant | one FalkorDB graph per player: `town:{player_id}` | **Two players side by side** |
+| High-concurrency reads and writes | all 10 agents run each tick phase concurrently against one graph | **Graph insights > Run the stress test**: 40 agents in 4 isolated worlds, about 450 writes/s on the live free tier |
+| Separate memory per user or tenant | one FalkorDB graph per player name: `town:{player_id}` | **Two players side by side** |
 
 **Agents That Act on Connected Data**
 
 | The track asks for | In Living Town |
 |---|---|
 | Multi-hop reasoning | provenance is a variable-length `TOLD*` path back to the eyewitness |
-| Graph algorithms as tools | label propagation (cliques), betweenness (gossip brokers), PageRank (best informed), SSpaths (who hears next), WCC, BFS, harmonic centrality |
+| Graph algorithms as tools | label propagation (cliques), betweenness (gossip brokers), PageRank (best informed), SSpaths (who hears next), WCC (rumour islands), harmonic centrality (fastest spreader) |
 | Tool selection through MCP | 19 memory tools exposed over MCP; Claude or any MCP client picks tools and arguments, never writes Cypher |
 | Actions based on graph results | the guard investigates and confronts *because* the provenance path exists; witnesses who know `report_crime` walk to the guard |
 | Explainable results | every answer returns the path that produced it |
 
+## Try it in two minutes (live site)
+
+1. Open the [live demo](https://living-town.onrender.com), type a name, press **Enter the town**.
+2. Click **The Forge**, then **Steal the silver hammer**.
+3. Press **Live through the day** and watch the **Town talk** log: Bram tells Mira, Mira tells Captain Oswin, Oswin posts an investigation, Finn claims it, and at dawn Oswin confronts you.
+4. Open **Captain Oswin's memory** and press **Why do you believe that?** A red thread draws the provenance path across the map.
+5. Press **Two players side by side**: the second player's world is a separate graph where nobody has heard of any hammer.
+
 ## Why the graph does the work
 
-Graphiti, Mem0 and Cognee give *one* agent a memory. Living Town is about memory that is **socially distributed** across many agents, and every interesting answer is a graph traversal:
+Most agent-memory layers model what *one* agent knows. Living Town models how knowledge moves **between** agents, and every interesting answer is a graph traversal:
 
 | | Typical agent memory | Living Town |
 |---|---|---|
@@ -78,12 +78,20 @@ Graphiti, Mem0 and Cognee give *one* agent a memory. Living Town is about memory
 - Cliques come from label propagation; the gossip broker comes from betweenness.
 - Bram never talks to the captain (affinity 0.1), so the story *has* to route through Mira. That routing only exists in the graph.
 
+## Why FalkorDB
+
+- **A graph per tenant, structurally.** `select_graph(f"town:{player}")` gives every player an isolated graph on one instance. Isolation is not a `WHERE tenant_id = ...` clause, and removing a stale world is a single `GRAPH.DELETE`.
+- **Read-only where it should be.** Every read and every algorithm call goes through `GRAPH.RO_QUERY`; only deliberate writes use `GRAPH.QUERY`.
+- **Algorithms next to the data.** Label propagation, betweenness, PageRank, harmonic centrality, WCC and SSpaths run as `algo.*` procedures inside the database, on the live memory graph, with nothing exported.
+- **Full-text entity resolution.** `db.idx.fulltext` resolves "the blaksmith" or "hamer" to real nodes before any tool runs, so agents never act on an entity that is not in the graph.
+- **Fast enough to simulate.** A tick of 10 concurrent agents is 23-42 queries; about 160 ms against FalkorDB Cloud from a laptop.
+
 ## What you can do
 
 - **Act:** walk, steal, give, help, trade, spread a rumour (lie), talk.
 - **Watch:** NPCs follow daily schedules; each tick all 10 agents run concurrently, perceive who is nearby, and pass on their most salient belief. Gossip shows as sparks travelling between avatars.
 - **Ask why:** open any NPC's memory, press *Why do you believe that?* and a red thread draws the provenance path across the map.
-- **Coordinate:** the guard posts an investigation on a shared task board; the deputy (the only agent who `KNOWS_HOW` to investigate) claims it atomically, traces the story to its eyewitness, takes testimony and hands findings back.
+- **Coordinate:** the guard posts an investigation on a shared task board; the deputy (who `KNOWS_HOW` to investigate) claims it atomically, traces the story to its eyewitness, takes testimony and hands findings back.
 - **Lie:** tell Mira that Pip stole the hammer. If she already believes otherwise with more confidence, she catches the lie and *that* becomes a story about you.
 - **Return:** come back under the same name in a new session and the townsfolk greet you from persistent memory.
 - **Compare tenants:** *Two players side by side* shows two isolated worlds; a crime in one never leaks to the other.
@@ -98,7 +106,7 @@ flowchart LR
   subgraph Backend [FastAPI :8002]
     API[REST + WebSocket]
     SIM[Tick engine<br/>10 NPC agents per world<br/>asyncio.gather per phase]
-    AG[Dialogue agent<br/>Claude tool use or scripted]
+    AG[Dialogue agent<br/>Claude tool use or rule-based]
     TOOLS[Fixed memory tool catalogue]
     CAT[Hand-written parameterised Cypher<br/>queries.py]
     MCP[MCP server, stdio]
@@ -122,8 +130,7 @@ flowchart LR
   CAT --> G3
 ```
 
-Each tick runs seven phases; inside every phase all agents run concurrently against the same graph:
-`move` (schedule, or a task: report / investigate / confront) then `gossip` then `post` tasks then `claim` (races settled by the database) then `work` then `teach` then `notice` unseen thefts. A tick is 23-42 graph queries in about 6 sequential round trips (independent reads and writes run concurrently): roughly 160 ms against FalkorDB Cloud from a laptop and 260-400 ms on the live site.
+Each tick, all 10 agents first **move** at once (by schedule, or by task: report / investigate / confront). Then, for every agent concurrently, they **gossip**, **post** tasks, **work** on tasks they hold, **teach** skills and **notice** unseen thefts. Open tasks are **claimed** last, with races settled by the database, so a task claimed this tick is worked on the next. A tick is 23-42 graph queries in about 6 sequential round trips (independent reads and writes run concurrently): roughly 160 ms against FalkorDB Cloud from a laptop and 260-400 ms on the live site.
 
 ## Graph data model
 
@@ -176,9 +183,9 @@ Rules the engine applies:
 
 ## Cypher queries and graph algorithms
 
-The product runs only hand-written, parameterised queries from `backend/app/queries.py` (108 of them: 50 reads, 50 writes, 8 algorithm calls). Agents, Claude and MCP clients pick a query and arguments; none of them writes Cypher. Reads use `ro_query`. The full list with every Cypher statement is generated into [docs/CYPHER.md](docs/CYPHER.md) (`uv run python -m app.catalogue`).
+All Cypher is hand-written and parameterised, collected in `backend/app/queries.py` (108 queries: 50 reads, 50 writes, 8 algorithm calls). Agents, Claude and MCP clients choose a query and its arguments; none of them writes Cypher. Reads use `ro_query`. The full list is generated into [docs/CYPHER.md](docs/CYPHER.md) with `cd backend && uv run python -m app.catalogue > ../docs/CYPHER.md`.
 
-Graph algorithms (FalkorDB procedures) the product depends on:
+Graph algorithms (FalkorDB procedures) the app runs:
 
 | Query | Procedure | Used for |
 |---|---|---|
@@ -188,9 +195,9 @@ Graph algorithms (FalkorDB procedures) the product depends on:
 | `broadcast_reach` | `algo.HarmonicCentrality` over `CLOSE` | who can reach everyone fastest |
 | `rumour_islands` | `algo.WCC` over `TOLD` | disconnected rumour clusters |
 | `forecast_spread` | `algo.SSpaths` over `KNOWS.distance` | who is likely to hear a story next (dashed rings on the map) |
-| `social_route` | `algo.SPpaths` over `KNOWS.distance` | cheapest social route between two agents |
-| `reach_within` | `algo.BFS` over `CLOSE` | who an agent can reach in N hops |
 | `resolve_entity` | `db.idx.fulltext.queryNodes` (prefix and fuzzy) | resolve "the blaksmith" or "hamer" to graph entities before any tool call |
+
+The catalogue also holds `social_route` (`algo.SPpaths`) and `reach_within` (`algo.BFS`), which are available to tools but not yet used by the UI.
 
 Key Cypher (abridged; see docs/CYPHER.md):
 
@@ -224,14 +231,14 @@ YIELD path, pathWeight ...
 
 ## Agents and the LLM
 
-- **Without `ANTHROPIC_API_KEY` (the default):** everything runs in deterministic *scripted* mode. Agent decisions are rule-based (seeded per tick and agent), and dialogue is templated from the rows the memory tools return. The demo never depends on a key; the UI shows *Scripted agents*.
-- **With a key:** NPC dialogue uses Claude (`claude-opus-5-5` by default, `LLM_MODEL` to override) through the official `anthropic` SDK with tool use over the fixed catalogue: `resolve_entity`, `recall_about`, `who_told_me`, `what_happened_at`, `my_relationships`, `my_procedures`, `my_tasks`, `opinion_of_player`, `record_memory`. Adaptive thinking, `effort` from `LLM_EFFORT` (default `low` for chat latency), no forced `tool_choice`, `stop_reason` checked (refusal, pause_turn, max_tokens), and server-side refusal fallbacks (`fallbacks: "default"`).
+- **Without `ANTHROPIC_API_KEY` (the default, and the live demo):** agents are rule-based policies that read their own graph memory every tick and act on it; nothing is pre-recorded. Dialogue is composed from the rows the memory tools return. The UI shows *Rule-based agents*.
+- **With a key:** NPC dialogue uses Claude (`claude-opus-5-5` by default) with tool use over the same fixed catalogue: `resolve_entity`, `recall_about`, `who_told_me`, `what_happened_at`, `my_relationships`, `my_procedures`, `my_tasks`, `opinion_of_player`, `record_memory`.
 - **Output validation:** every person, item and place the model names must appear in that turn's tool results; otherwise the reply is discarded and the templated, memory-grounded answer is shown instead (the UI says so).
 - Tick decisions stay rule-based even with a key, so a tick of 10 agents costs no tokens and stays fast.
 
 ## MCP server
 
-The same memory tools are exposed over MCP (Python MCP SDK v2 `MCPServer`, the successor of FastMCP, stdio transport): `create_world`, `list_npcs`, `resolve_entity`, `recall_about`, `who_told_me`, `what_happened_at`, `my_relationships`, `my_procedures`, `record_memory`, `tell`, `who_knows`, `forecast_spread`, `task_board`, `post_task`, `claim_task`, `complete_task`, `town_analytics`, `talk_to`, `advance`. Every tool takes `player_id`, so a client only ever touches one tenant graph.
+The same memory tools are exposed over MCP (Python MCP SDK, stdio transport): `create_world`, `list_npcs`, `resolve_entity`, `recall_about`, `who_told_me`, `what_happened_at`, `my_relationships`, `my_procedures`, `record_memory`, `tell`, `who_knows`, `forecast_spread`, `task_board`, `post_task`, `claim_task`, `complete_task`, `town_analytics`, `talk_to`, `advance`. Every tool takes `player_id`, so a client only ever touches one tenant graph.
 
 Claude Code:
 
@@ -257,7 +264,7 @@ Then ask, for example: *"In player ada's town, how does Captain Oswin know about
 
 ## Setup
 
-Requirements: Docker, Python 3.12 with [uv](https://docs.astral.sh/uv/), Node 20+.
+Requirements: Docker, Python 3.12 with [uv](https://docs.astral.sh/uv/), Node 20.19+.
 
 ```bash
 git clone https://github.com/thedevkansal/living-town && cd living-town
@@ -269,7 +276,8 @@ cd backend
 uv sync
 uv run uvicorn app.main:app --port 8002   # API + WebSocket on http://localhost:8002
 
-cd ../frontend
+# in a second terminal
+cd frontend
 npm install
 npm run dev                               # UI on http://localhost:5174 (proxies /api and /ws to :8002)
 ```
@@ -282,7 +290,8 @@ cd backend && uv run pytest -q
 
 Full stack in containers (UI served by the backend): `docker compose --profile app up -d --build`, then open http://localhost:8002.
 
-### Configuration
+<details>
+<summary><b>Configuration</b></summary>
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -294,10 +303,11 @@ Full stack in containers (UI served by the backend): `docker compose --profile a
 | `DEMO_AUTOCREATE` | `false` | create the demo world at startup if missing |
 | `ANTHROPIC_API_KEY` | unset | enables Claude dialogue |
 | `LLM_MODEL` / `LLM_EFFORT` | `claude-opus-5-5` / `low` | model and effort for dialogue |
-| `LLM_DISABLED` | `false` | force scripted mode |
+| `LLM_DISABLED` | `false` | force rule-based dialogue even with a key |
+
+</details>
 
 ## Deploy
-
 
 The root `Dockerfile` builds the React UI and serves it from FastAPI on `$PORT`
 (UI at `/`, API at `/api`). `render.yaml` is a Render Blueprint: **New > Blueprint >
@@ -309,11 +319,10 @@ docker build -t living-town .
 docker run --env-file .env -e PORT=10000 -p 10000:10000 living-town
 ```
 
-Free-tier note: on startup the backend prunes the least recently active `town:*` worlds beyond `MAX_WORLDS`, and it starts even if FalkorDB is briefly unreachable.
+Free-tier notes: the backend prunes the least recently active `town:*` worlds beyond `MAX_WORLDS`, starts even if FalkorDB is briefly unreachable, and on Render pings its own public URL every 10 minutes (plus a GitHub Actions keep-alive) so neither the app nor the database goes to sleep.
 
 <details>
 <summary><b>HTTP API</b></summary>
-
 
 | Method | Path | |
 |---|---|---|
@@ -336,10 +345,11 @@ All characters, places and events are synthetic and invented for this project. N
 
 ## Known limitations
 
-- **Scripted by default.** Without an `ANTHROPIC_API_KEY` (the live demo has none), NPC decisions and dialogue are rule-based and templated from memory rows. That is deliberate: the memory, gossip and coordination are the product, and they behave the same with or without a model.
+- **Rule-based agents by default.** The live demo has no `ANTHROPIC_API_KEY`, so NPC decisions and dialogue come from rule-based policies over each agent's graph memory. That is deliberate: the memory, gossip and coordination are the product, and they behave the same with or without a model.
 - **Live latency.** The app runs in Singapore and FalkorDB Cloud in Mumbai, so every graph query is a cross-region round trip. Ticks batch their queries to stay at 260-400 ms, and a full simulated day plays in about 10 seconds.
-- **Free tiers.** Render sleeps after ~15 idle minutes; a scheduled keep-alive pings the app (and through it the database) to keep both awake during judging.
+- **Free tiers.** The app pings itself to stay awake, but a free FalkorDB Cloud instance can still be paused by the provider; if the live site cannot reach the database, the local setup below runs the same code.
+- **Tenancy is per name.** Two visitors who type the same name share a world; that is what lets a returning player pick up where they left off.
 
 ## AI assistance disclosure
 
-Built with Claude Code (Anthropic) as a coding assistant, per hackathon rule 11: it wrote most of the code, tests and this README under the author's direction. The running product optionally uses Claude (via the Anthropic API) for NPC dialogue; without an API key it runs fully in scripted mode.
+Built with Claude Code (Anthropic) as the coding assistant, per hackathon rule 11. Claude Code wrote most of the code, tests and docs. The author chose the concept and the tracks (after building and comparing two candidate projects), set the scope and priorities, tested the deployed app, and directed each round of fixes from those tests. The running product optionally uses Claude for NPC dialogue; without an API key it uses rule-based agents.
