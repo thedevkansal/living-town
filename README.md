@@ -123,7 +123,7 @@ flowchart LR
 ```
 
 Each tick runs seven phases; inside every phase all agents run concurrently against the same graph:
-`move` (schedule, or a task: report / investigate / confront) then `gossip` then `post` tasks then `claim` (races settled by the database) then `work` then `teach` then `notice` unseen thefts. On the dev laptop a tick is roughly 70-100 graph queries in about 100-150 ms.
+`move` (schedule, or a task: report / investigate / confront) then `gossip` then `post` tasks then `claim` (races settled by the database) then `work` then `teach` then `notice` unseen thefts. A tick is 23-42 graph queries in about 6 sequential round trips (independent reads and writes run concurrently): roughly 160 ms against FalkorDB Cloud from a laptop and 260-400 ms on the live site.
 
 ## Graph data model
 
@@ -176,7 +176,7 @@ Rules the engine applies:
 
 ## Cypher queries and graph algorithms
 
-The product runs only hand-written, parameterised queries from `backend/app/queries.py` (99 of them: 47 reads, 44 writes, 8 algorithm calls). Agents, Claude and MCP clients pick a query and arguments; none of them writes Cypher. Reads use `ro_query`. The full list with every Cypher statement is generated into [docs/CYPHER.md](docs/CYPHER.md) (`uv run python -m app.catalogue`).
+The product runs only hand-written, parameterised queries from `backend/app/queries.py` (108 of them: 50 reads, 50 writes, 8 algorithm calls). Agents, Claude and MCP clients pick a query and arguments; none of them writes Cypher. Reads use `ro_query`. The full list with every Cypher statement is generated into [docs/CYPHER.md](docs/CYPHER.md) (`uv run python -m app.catalogue`).
 
 Graph algorithms (FalkorDB procedures) the product depends on:
 
@@ -337,7 +337,7 @@ All characters, places and events are synthetic and invented for this project. N
 ## Known limitations
 
 - **Scripted by default.** Without an `ANTHROPIC_API_KEY` (the live demo has none), NPC decisions and dialogue are rule-based and templated from memory rows. That is deliberate: the memory, gossip and coordination are the product, and they behave the same with or without a model.
-- **Live latency.** The app runs in Singapore and FalkorDB Cloud in Mumbai, so every graph query is a cross-region round trip; ticks are slower live than on a laptop.
+- **Live latency.** The app runs in Singapore and FalkorDB Cloud in Mumbai, so every graph query is a cross-region round trip. Ticks batch their queries to stay at 260-400 ms, and a full simulated day plays in about 10 seconds.
 - **Free tiers.** Render sleeps after ~15 idle minutes; a scheduled keep-alive pings the app (and through it the database) to keep both awake during judging.
 
 ## AI assistance disclosure
