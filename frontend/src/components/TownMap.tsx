@@ -83,8 +83,8 @@ export function TownMap({ state, bubbles, pulses, ripples, selected, onSelect, o
   const threadIds = useMemo(() => {
     if (!highlight?.found) return []
     const ids = [...chain]
-    const actor = highlight.nodes.find((n) => n.label === 'Player' || (n.label === 'NPC' && !chain.includes(n.id)))
-    if (actor && highlight.edges.some((e) => e.from === actor.id && e.type !== 'TOLD' && e.type !== 'WITNESSED')) ids.unshift(actor.id)
+    const actor = (highlight.nodes ?? []).find((n) => n.label === 'Player' || (n.label === 'NPC' && !chain.includes(n.id)))
+    if (actor && (highlight.edges ?? []).some((e) => e.from === actor.id && e.type !== 'TOLD' && e.type !== 'WITNESSED')) ids.unshift(actor.id)
     return ids.filter((id) => spots[id])
   }, [highlight, chain, spots])
   const threadPath = threadIds.map((id) => spots[id]).reduce((acc, p, i, arr) => (i === 0 ? `M${p.x},${p.y - 6}` : acc + ' ' + arc(arr[i - 1], p, 0.28).replace(/^M[^Q]+/, '')), '')

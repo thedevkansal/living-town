@@ -36,7 +36,13 @@ export function Inspector({ world, pid, npc, onClose }: { world: World; pid: str
     try {
       const d = await api.talk(pid, npc, text)
       setDialogue(d)
-      if (d.provenance?.found) world.setHighlight({ ...d.provenance, chain: d.provenance.chain })
+      // The talk reply carries only a summary of the provenance (no nodes/edges), so fetch the
+      // full path for the cited fact before drawing the thread and the "How X knows" card.
+      const fact = d.provenance?.found ? d.facts?.[0] : undefined
+      if (fact) {
+        const p = await api.provenance(pid, npc, fact)
+        if (p.found) { world.setHighlight(p); world.setFocusFact(fact) }
+      }
     } catch (e) { world.notify((e as Error).message, 'err') } finally { setSending(false); setMsg('') }
   }
 
@@ -154,16 +160,16 @@ export function ProvenanceCard({ prov, world }: { prov: Provenance; world: World
   if (!prov.found) return <div className="prov prov--none" ref={ref}><p>{prov.narrative}</p></div>
   // render the path in reading order: actor -> event <- witness -> ... -> believer
   const steps: { id: string; label: string; name: string; edge?: string }[] = []
-  const actorEdge = prov.edges.find((e) => e.type !== 'TOLD' && e.type !== 'WITNESSED')
-  const ev = prov.nodes.find((n) => n.label === 'Event')
+  const actorEdge = (prov.edges ?? []).find((e) => e.type !== 'TOLD' && e.type !== 'WITNESSED')
+  const ev = (prov.nodes ?? []).find((n) => n.label === 'Event')
   // the event's own name already says who did it ("Ada stole Bram's silver hammer"), so the actor gets no chip of its own
   if (actorEdge && !ev) {
-    const a = prov.nodes.find((n) => n.id === actorEdge.from)!
+    const a = (prov.nodes ?? []).find((n) => n.id === actorEdge.from)!
     steps.push({ id: a.id, label: a.label, name: a.label === 'Player' ? world.state?.player.name ?? 'You' : a.name })
   }
   if (ev) steps.push({ id: ev.id, label: 'Event', name: prov.location ? `${ev.name} (${prov.location.name})` : ev.name })
   prov.chain.forEach((id, i) => {
-    const n = prov.nodes.find((x) => x.id === id)!
+    const n = (prov.nodes ?? []).find((x) => x.id === id)!
     steps.push({ id, label: n.label, name: n.label === 'Player' ? 'You' : n.name, edge: i === 0 ? (ev ? 'saw it' : undefined) : 'told' })
   })
   return (
