@@ -170,11 +170,16 @@ export function useWorld(pid: string | null) {
           break
         case 'task_posted':
           ripple(e.by, 'task')
+          // keep the task board live mid-day (the full state only resyncs once the day has played out)
+          setState((s) => s && (s.tasks.some((t) => t.id === e.task) ? s : { ...s, tasks: [{
+            id: e.task, kind: e.kind, status: 'open', posted_by: e.by, claimed_by: null, target: null, note: null, result: null,
+            posted_tick: s.clock.tick, done_tick: null, claim: e.claim, handed_to: null }, ...s.tasks] }))
           addLog({ tone: 'task', npc: e.by, text: `${nameOf(e.by)} posts ${/^[aeiou]/.test(e.kind) ? 'an' : 'a'} ${e.kind} task: ${e.claim}` })
           await wait(step)
           break
         case 'task_claimed':
           ripple(e.by, 'task')
+          setState((s) => s && { ...s, tasks: s.tasks.map((t) => (t.id === e.task ? { ...t, status: 'claimed', claimed_by: e.by } : t)) })
           addLog({ tone: 'task', npc: e.by, text: `${nameOf(e.by)} claims the ${e.kind === 'investigate' ? 'investigation' : e.kind} from the shared task board.` })
           break
         case 'claim_lost':
@@ -184,6 +189,8 @@ export function useWorld(pid: string | null) {
           addLog({ tone: 'task', npc: e.by, text: `${nameOf(e.by)} ${e.note}.` })
           break
         case 'task_done':
+          setState((s) => s && { ...s, tasks: s.tasks.map((t) => (t.id === e.task
+            ? { ...t, status: 'done', claimed_by: t.claimed_by ?? e.by, result: e.result, handed_to: e.handoff ?? t.handed_to } : t)) })
           addLog({ tone: 'task', npc: e.by, text: `${nameOf(e.by)} completes a task: ${e.result}` })
           break
         case 'handoff':

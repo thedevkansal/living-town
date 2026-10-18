@@ -6,8 +6,8 @@ Render tier, open the site a minute before recording so it is awake.
 
 **Recording setup.** Record at 1920x1080. Add `?slow` to the URL
 (https://living-town.onrender.com/?slow) for recording pace: each hour takes about 2 s and
-the beats inside an hour are spaced out, so a whole day plays in roughly 25 s and every
-spark, bubble and log line can be narrated. Without `?slow` a day plays in about 10 s.
+the beats inside an hour are spaced out, so a whole day plays in about 15-20 s and every
+spark, bubble and log line can be narrated. Without `?slow` a day plays in about 9 s.
 Use a fresh name per take (or *Start Ada's world over* on the join screen) so the story
 starts from scratch.
 
