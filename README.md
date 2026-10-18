@@ -7,8 +7,6 @@
 Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs x FalkorDB).
 **Tracks:** Agent Memory and Coordination (primary) · Agents That Act on Connected Data.
 
-> The live demo runs on free tiers (Render + FalkorDB Cloud) and pings itself to stay awake. If it was idle anyway, the first load can take about a minute.
-
 ![Captain Oswin explains how he knows: the provenance thread runs from the theft through Bram and Mira to him, drawn across the map, with his memory graph on the right](docs/media/provenance.png)
 
 ## The 30-second version
