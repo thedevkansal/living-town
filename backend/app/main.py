@@ -47,9 +47,34 @@ class Hub:
 hub = Hub()
 autoplay: dict[str, asyncio.Task] = {}
 
+# Render's free tier sleeps a service after 15 minutes without inbound traffic. A request
+# to our own public URL goes through Render's edge, so it counts as traffic; /api/health
+# also pings FalkorDB, which keeps a free FalkorDB Cloud instance from pausing.
+SELF_PING_SECONDS = 10 * 60
+
+
+async def self_ping(base_url: str) -> None:
+    from urllib.request import urlopen  # stdlib: httpx is only a dev dependency
+
+    url = base_url.rstrip("/") + "/api/health"
+
+    def get() -> int:
+        with urlopen(url, timeout=60) as r:
+            return r.status
+
+    while True:
+        await asyncio.sleep(SELF_PING_SECONDS)
+        try:
+            log.info("keep-awake ping %s -> %s", url, await asyncio.to_thread(get))
+        except Exception as exc:
+            log.warning("keep-awake ping failed: %s", exc)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # RENDER_EXTERNAL_URL is set by Render on every web service; unset locally.
+    public_url = os.getenv("KEEP_AWAKE_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    pinger = asyncio.create_task(self_ping(public_url)) if public_url else None
     warm = None
     if await store.ping():
         warm = asyncio.create_task(store.warmup())  # open the connection pool in the background
@@ -65,6 +90,8 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("FalkorDB not reachable")
     yield
+    if pinger:
+        pinger.cancel()
     if warm:
         warm.cancel()
     for t in autoplay.values():

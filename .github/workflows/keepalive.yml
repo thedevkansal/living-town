@@ -1,10 +1,10 @@
 name: keepalive
 
 # Render's free tier sleeps after ~15 idle minutes and a free FalkorDB Cloud instance pauses when unused.
-# /api/health pings FalkorDB, so one request every 10 minutes keeps both awake for the judges.
+# /api/health pings FalkorDB, so frequent pings keep both awake for the judges. The backend also pings its own public URL every 10 minutes.
 on:
   schedule:
-    - cron: "7-59/10 * * * *"   # :07, :17, :27, ... (off the busy top of the hour)
+    - cron: "3-58/5 * * * *"   # every 5 min at :03, :08, ... (GitHub may delay scheduled runs; the app also pings itself)
   workflow_dispatch:
 
 jobs:
