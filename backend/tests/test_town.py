@@ -181,6 +181,45 @@ async def test_graph_algorithms(world):
     assert forecast and all(f["npc"] not in holders for f in forecast)
 
 
+async def test_provenance_stays_fast_over_many_days(world):
+    """Regression: the TOLD*0..10 path must be filtered during expansion, not after (it went exponential)."""
+    import time
+    fid = await run_theft(world)
+    events = []
+    for _ in range(30):
+        events += (await sim.tick(world))["events"]
+    while (await sim.clock(world))["slot_index"] != 1:  # morning: the market is busy
+        events += (await sim.tick(world))["events"]
+    await sim.act(world, {"action": "move", "location": "market"})
+    out = await sim.act(world, {"action": "steal", "item": "apples"})
+    assert out["events"][0]["witnesses"], "someone should see the second theft"
+    late = []
+    for _ in range(10):
+        late += (await sim.tick(world))["events"]
+    assert not [e for e in events + late if e["type"] == "error"]
+    assert any(e["type"] == "confront" and e["fact"] == fid for e in events)
+    assert any(e["type"] == "confront" and e["fact"] == out["fact"] for e in late), "guard must still confront"
+    worst = 0.0
+    for f in (fid, out["fact"]):
+        for row in await T.who_knows(world, f):
+            t0 = time.perf_counter()
+            prov = await T.who_told_me(world, row["npc"], f)
+            worst = max(worst, time.perf_counter() - t0)
+            assert prov["found"] and prov["chain"][-1] == row["npc"]
+            if row["source"] == "told":
+                assert len(prov["chain"]) - 1 == row["hop"] and prov["chain"][-2] == row["via"]
+    assert worst < 0.3, f"provenance took {worst * 1000:.0f} ms"
+
+
+async def test_conflict_with_several_rivals_has_one_winner(world):
+    fid = await run_theft(world)  # Bram saw it: confidence 1.0
+    await sim.act(world, {"action": "lie", "npc": "bram", "subject": "pip", "item": "hammer"})
+    await sim.act(world, {"action": "lie", "npc": "bram", "subject": "tobias", "item": "hammer"})
+    beliefs = {b["fact"]: b["stance"] for b in await T.recall_all(world, "bram")}
+    assert beliefs[fid] == "accepted"
+    assert beliefs["claim-pip-stole-hammer"] == beliefs["claim-tobias-stole-hammer"] == "doubted"
+
+
 async def test_llm_output_validation():
     ok, bad = agent.validate("Bram told me you took the silver hammer.", '{"via": "bram", "claim": "silver hammer"}',
                              "oswin", "Ada", "how do you know?")

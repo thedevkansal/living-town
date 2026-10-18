@@ -206,17 +206,23 @@ PLAYER_TELL = q("player_tell", "write", "The player tells an NPC a claim (possib
                        bel.hop=1, bel.via='player', bel.since_tick=$tick, bel.source='told', bel.corroborations=0
                    ON MATCH SET bel.corroborations = coalesce(bel.corroborations, 0) + 1
                    MERGE (p)-[t:TOLD {fact_id:$fid}]->(b)
-                   ON CREATE SET t.tick=$tick, t.confidence=$conf, t.times=1, t.channel='claim', t.primary=true
+                   ON CREATE SET t.tick=$tick, t.confidence=$conf, t.times=1, t.channel='claim',
+                       t.primary = coalesce(bel.via = 'player', false)
                    ON MATCH SET t.times = t.times + 1
                    RETURN bel.confidence AS confidence, bel.stance AS stance""")
 PROMOTE = q("promote_beliefs", "write", "Doubted beliefs that gathered enough corroboration become accepted",
             """MATCH (n:NPC {id:$npc})-[b:BELIEVES]->(f:Fact {id:$fid}) WHERE b.stance = 'doubted' AND b.confidence >= $accept
                SET b.stance = 'accepted' RETURN count(b) AS n""")
 RESOLVE_CONFLICT = q("resolve_conflict", "write",
-                     "Conflicting beliefs held by one NPC: the higher-confidence (trust-weighted) claim wins",
+                     "Conflicting beliefs held by one NPC: the highest-confidence (trust-weighted) claim wins, "
+                     "every rival is doubted",
                      """MATCH (n:NPC {id:$npc})-[b1:BELIEVES]->(f:Fact {id:$fid})-[:CONTRADICTS]-(g:Fact)<-[b2:BELIEVES]-(n)
                         WHERE b1.stance <> 'faded' AND b2.stance <> 'faded'
-                        WITH b1, b2, f, g, CASE WHEN b1.confidence > b2.confidence THEN f.id ELSE g.id END AS winner
+                        WITH n, b1, f, g, b2 ORDER BY b2.confidence DESC, g.id
+                        WITH n, b1, f, collect(g.id)[0] AS best_rival, max(b2.confidence) AS top
+                        WITH n, b1, f, CASE WHEN b1.confidence > top THEN f.id ELSE best_rival END AS winner
+                        MATCH (n)-[b2:BELIEVES]->(g:Fact)-[:CONTRADICTS]-(f) WHERE b2.stance <> 'faded'
+                        WITH DISTINCT b1, f, winner, b2, g
                         SET b1.stance = CASE WHEN winner = f.id THEN 'accepted' ELSE 'doubted' END,
                             b2.stance = CASE WHEN winner = g.id THEN 'accepted' ELSE 'doubted' END
                         RETURN f.id AS fact, g.id AS rival, winner, b1.confidence AS c_fact, b2.confidence AS c_rival,
@@ -359,8 +365,7 @@ RECALL_ALL = q("recall_all", "read", "All of an NPC's beliefs",
 PROVENANCE = q("who_told_me", "read",
                "Provenance: the primary TOLD chain from the original source to this NPC, plus the Event and actor",
                """MATCH (me:NPC {id:$npc})-[b:BELIEVES]->(f:Fact {id:$fid})
-                  OPTIONAL MATCH chain = (src)-[:TOLD*0..10]->(me)
-                    WHERE all(r IN relationships(chain) WHERE r.fact_id = $fid AND r.primary = true)
+                  OPTIONAL MATCH chain = (src)-[:TOLD*0..10 {fact_id:$fid, primary:true}]->(me)
                   WITH me, b, f, chain ORDER BY length(chain) DESC LIMIT 1
                   WITH me, b, f, chain, nodes(chain)[0] AS origin
                   OPTIONAL MATCH (origin)-[w:WITNESSED]->(e:Event)<-[:DERIVED_FROM]-(f)
