@@ -2,10 +2,22 @@
 
 **A graph memory engine for multi-agent systems, shown as a town that gossips.**
 
-**Live demo:** https://living-town.onrender.com  
-_Hosted on Render's free tier: the first visit after ~15 idle minutes takes about a minute to wake up._
+**[Live demo](https://living-town.onrender.com)** · **Demo video:** _(link added at submission)_ · **[Every Cypher query](docs/CYPHER.md)** · **[Demo script](docs/DEMO.md)**
 
-Ten NPC agents live in Thornbury. Each one's memory is a subgraph in FalkorDB: what they **saw** (episodic), what they **believe and who told them** (semantic, with provenance), and what they **know how to do** (procedural). When you steal the blacksmith's hammer, only the blacksmith sees it. Over the next simulated hours the story physically travels along social edges, losing confidence at every hop, until a guard who saw nothing walks up to you the next morning. Ask him *"How do you know?"* and he answers with the exact path through the graph:
+Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs x FalkorDB).
+**Tracks:** Agent Memory and Coordination (primary) · Agents That Act on Connected Data.
+
+> The live demo runs on Render's free tier: the first visit after ~15 idle minutes takes about a minute to wake up.
+
+<!-- HERO: drop a 1920x1080 screenshot or short GIF at docs/media/hero.gif and uncomment:
+![Living Town: the guard confronts the player, with the provenance thread drawn across the map](docs/media/hero.gif)
+-->
+
+## The 30-second version
+
+Ten NPC agents live in Thornbury. Each one's memory is a subgraph in FalkorDB: what they **saw** (episodic), what they **believe and who told them** (semantic, with provenance), and what they **know how to do** (procedural).
+
+You steal the blacksmith's silver hammer. Only the blacksmith sees it. Over the next simulated hours the story travels along social edges in the graph, losing confidence at every hop, until a guard who saw nothing walks up to you the next morning. Ask him *"How do you know?"* and he answers with the exact path the query returned:
 
 ```
 Ada -[stole]-> (theft) <-[WITNESSED]- Bram -[TOLD]-> Mira -[TOLD]-> Captain Oswin
@@ -13,12 +25,43 @@ Ada -[stole]-> (theft) <-[WITNESSED]- Bram -[TOLD]-> Mira -[TOLD]-> Captain Oswi
  and Bram saw it with their own eyes at The Forge. Also confirmed by Finn."
 ```
 
-Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs x FalkorDB).
-**Track entered: Agent Memory and Coordination.**
+Ask Sister Agnes the same thing and she says *"Silver hammer? Nothing in my memory connects to that."* No path in the graph means no answer, not a guess.
 
-## Why this is not another memory layer
+## Try it in two minutes (live site)
 
-Graphiti, Mem0 and Cognee give *one* agent a memory. Living Town is about memory that is **socially distributed** across many agents:
+1. Open the [live demo](https://living-town.onrender.com), type a name, press **Enter the town**.
+2. Click **The Forge**, then **Steal the silver hammer**.
+3. Press **Live through the day** and watch the **Town talk** log: Bram tells Mira, Mira tells Captain Oswin, Oswin posts an investigation, Finn claims it, and at dawn Oswin confronts you.
+4. Open **Captain Oswin's memory** and press **Why do you believe that?** A red thread draws the provenance path across the map.
+5. Press **Two players side by side**: the second player's world is a separate graph where nobody has heard of any hammer.
+
+## How it covers the tracks
+
+**Agent Memory and Coordination**
+
+| The track asks for | Where it lives in the graph | See it in the app |
+|---|---|---|
+| Episodic memory | `(:NPC)-[:WITNESSED]->(:Event)-[:AT]->(:Location)` | Bram's memory: the theft he saw, with time and place |
+| Semantic memory | `(:NPC)-[:BELIEVES {confidence, stance, hop, via}]->(:Fact)` | Oswin accepts the story at 44%; Rowan doubts it at 19% |
+| Procedural memory | `(:NPC)-[:KNOWS_HOW {proficiency, learned_from}]->(:Procedure)` | Only Finn knows how to investigate; NPCs teach each other skills |
+| Persistent history across sessions | `(:Player)-[:HAD_SESSION]->(:Session)<-[:DURING]-(:Event)` | Return under the same name and townsfolk greet you from memory |
+| Shared state and handoffs | `(:Task)` with `POSTED_BY`, `CLAIMED_BY`, `HANDED_TO`, `FOUND` | Oswin posts, Finn claims atomically, findings are handed back |
+| High-concurrency reads and writes | all 10 agents run each tick phase concurrently against one graph | **Graph insights > Run the stress test**: 40 agents in 4 worlds, writes per second |
+| Separate memory per user or tenant | one FalkorDB graph per player: `town:{player_id}` | **Two players side by side** |
+
+**Agents That Act on Connected Data**
+
+| The track asks for | In Living Town |
+|---|---|
+| Multi-hop reasoning | provenance is a variable-length `TOLD*` path back to the eyewitness |
+| Graph algorithms as tools | label propagation (cliques), betweenness (gossip brokers), PageRank (best informed), SSpaths (who hears next), WCC, BFS, harmonic centrality |
+| Tool selection through MCP | 19 memory tools exposed over MCP; Claude or any MCP client picks tools and arguments, never writes Cypher |
+| Actions based on graph results | the guard investigates and confronts *because* the provenance path exists; witnesses who know `report_crime` walk to the guard |
+| Explainable results | every answer returns the path that produced it |
+
+## Why the graph does the work
+
+Graphiti, Mem0 and Cognee give *one* agent a memory. Living Town is about memory that is **socially distributed** across many agents, and every interesting answer is a graph traversal:
 
 | | Typical agent memory | Living Town |
 |---|---|---|
@@ -30,30 +73,20 @@ Graphiti, Mem0 and Cognee give *one* agent a memory. Living Town is about memory
 | Coordination | message passing | shared task board in the graph with atomic claims and handoffs |
 | Tenancy | filter on a column | one FalkorDB graph per player: `town:{player_id}` |
 
-The graph does work the agents could not do without it: who-heard-what-from-whom is a variable-length path query, the rumour forecast is a weighted shortest-path algorithm, cliques come from label propagation, and the "how do you know?" answer is literally the path the query returns. When no path exists, agents say so: *"Nothing in my memory connects to that."*
+- "How do you know?" is a variable-length path query, and the path *is* the explanation.
+- "Who hears it next?" is a weighted shortest-path algorithm over social distance.
+- Cliques come from label propagation; the gossip broker comes from betweenness.
+- Bram never talks to the captain (affinity 0.1), so the story *has* to route through Mira. That routing only exists in the graph.
 
 ## What you can do
 
 - **Act:** walk, steal, give, help, trade, spread a rumour (lie), talk.
 - **Watch:** NPCs follow daily schedules; each tick all 10 agents run concurrently, perceive who is nearby, and pass on their most salient belief. Gossip shows as sparks travelling between avatars.
 - **Ask why:** open any NPC's memory, press *Why do you believe that?* and a red thread draws the provenance path across the map.
-- **Coordinate:** the guard posts an investigation on a shared task board; the deputy (the only agent who `KNOWS_HOW` to investigate) claims it atomically, traces the story to its eyewitness, takes testimony and hands findings back. Witnesses who know `report_crime` walk to the guard themselves.
+- **Coordinate:** the guard posts an investigation on a shared task board; the deputy (the only agent who `KNOWS_HOW` to investigate) claims it atomically, traces the story to its eyewitness, takes testimony and hands findings back.
 - **Lie:** tell Mira that Pip stole the hammer. If she already believes otherwise with more confidence, she catches the lie and *that* becomes a story about you.
 - **Return:** come back under the same name in a new session and the townsfolk greet you from persistent memory.
 - **Compare tenants:** *Two players side by side* shows two isolated worlds; a crime in one never leaks to the other.
-
-## Demo script (about 2.5 minutes)
-
-1. **Join.** Open http://localhost:5174, type `Ada`, press *Enter the town*. (Pitch: every NPC's memory is a FalkorDB subgraph.)
-2. **Walk.** Click *The Forge* on the map. Press *Wait an hour*: it is morning and Bram is at his anvil.
-3. **Steal.** Press *Steal the silver hammer* in the action bar. Bram shouts; the log says "Seen by Bram".
-4. **Let time pass.** Press *Sleep till dawn* and narrate as it plays (about 12 seconds): at midday Bram tells Mira at the Crooked Kettle (blue spark); in the evening Mira tells Captain Oswin; Oswin posts an investigation; Finn claims it from the task board, walks to Bram at night and takes his testimony; at dawn Oswin walks to the Forge and confronts you.
-5. **Ask how he knows.** Click Oswin's avatar. In his memory press *Why do you believe that?* on "Ada stole Bram's silver hammer". The red thread runs Ada, Bram, Mira, Oswin across the map; the card shows the path and the narrative. Point at the memory graph: ember triangles are things he saw, blue dots are beliefs, green diamonds are procedures, purple squares are tasks.
-6. **Honesty.** Close the inspector, click Sister Agnes, press the quick question *What about the hammer?* She answers "Silver hammer? Nothing in my memory connects to that."
-7. **Lie.** Walk to the Crooked Kettle, select Mira, press *Spread a rumour*: "Pip stole the silver hammer". Mira trusts her own source more and calls you out; the conflict and the new story appear in the log.
-8. **Graph algorithms.** Open *Graph insights*: cliques (label propagation, toggle *Show on the map*), gossip brokers (betweenness: Mira), best informed (PageRank over `TOLD`). Press *Run the stress test*: 40 agents in 4 worlds reading and writing concurrently, with writes per second.
-9. **Tenant isolation.** Press *Two players side by side*: Bo's Thornbury opens next to Ada's, in its own graph `town:bo`. Nobody there has heard of any hammer.
-10. **Persistence.** Press *Switch player*, return as `Ada`. Bram, Mira and Oswin greet you with what they remember and who told them.
 
 ## Architecture
 
@@ -278,7 +311,9 @@ docker run --env-file .env -e PORT=10000 -p 10000:10000 living-town
 
 Free-tier note: on startup the backend prunes the least recently active `town:*` worlds beyond `MAX_WORLDS`, and it starts even if FalkorDB is briefly unreachable.
 
-## API
+<details>
+<summary><b>HTTP API</b></summary>
+
 
 | Method | Path | |
 |---|---|---|
@@ -293,9 +328,17 @@ Free-tier note: on startup the backend prunes the least recently active `town:*`
 | POST | `/api/bench` `{tenants, ticks}` | concurrency stress test across isolated worlds |
 | WS | `/ws/{pid}` | live tick and action events |
 
+</details>
+
 ## Data
 
 All characters, places and events are synthetic and invented for this project. No external or personal data is used.
+
+## Known limitations
+
+- **Scripted by default.** Without an `ANTHROPIC_API_KEY` (the live demo has none), NPC decisions and dialogue are rule-based and templated from memory rows. That is deliberate: the memory, gossip and coordination are the product, and they behave the same with or without a model.
+- **Live latency.** The app runs in Singapore and FalkorDB Cloud in Mumbai, so every graph query is a cross-region round trip; ticks are slower live than on a laptop.
+- **Free tiers.** Render sleeps after ~15 idle minutes; a scheduled keep-alive pings the app (and through it the database) to keep both awake during judging.
 
 ## AI assistance disclosure
 
