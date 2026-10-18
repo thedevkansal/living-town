@@ -27,7 +27,7 @@ export function Inspector({ world, pid, npc, onClose }: { world: World; pid: str
       const p = await api.provenance(pid, npc, fact)
       world.setHighlight(p)
       world.setFocusFact(fact)
-    } finally { setAsking(null) }
+    } catch (e) { world.notify((e as Error).message, 'err') } finally { setAsking(null) }
   }
 
   const send = async (text: string) => {
@@ -46,6 +46,7 @@ export function Inspector({ world, pid, npc, onClose }: { world: World; pid: str
   }
 
   const op = mem?.opinion
+  const count = (label: string) => mem?.nodes.filter((n) => n.label === label && !(label === 'Fact' && n.stance === 'faded')).length ?? 0
   return (
     <aside className="inspector" aria-label={`Memory of ${here?.name ?? npc}`}>
       <header className="insp__head" style={{ ['--c' as string]: here?.color ?? mem?.npc.color }}>
@@ -89,10 +90,12 @@ export function Inspector({ world, pid, npc, onClose }: { world: World; pid: str
 
       <section className="insp__sec">
         <h3>Memory graph</h3>
-        <div className="legend">
-          <span className="lg lg--episodic">Saw</span><span className="lg lg--semantic">Believes</span>
-          <span className="lg lg--doubted">Doubts</span><span className="lg lg--procedural">Knows how</span>
-          <span className="lg lg--coordination">Task</span>
+        <div className="legend" aria-label="Memory types">
+          <span className="lg lg--episodic">Saw <i>= episodic</i> <b className="num">{count('Event')}</b></span>
+          <span className="lg lg--semantic">Believes <i>= semantic</i> <b className="num">{count('Fact')}</b></span>
+          <span className="lg lg--procedural">Knows how <i>= procedural</i> <b className="num">{count('Procedure')}</b></span>
+          <span className="lg lg--coordination">Tasks <b className="num">{count('Task')}</b></span>
+          {mem?.nodes.some((n) => n.label === 'Fact' && n.stance === 'doubted') && <span className="lg lg--doubted">Doubts</span>}
         </div>
         {mem ? <MemoryGraph nodes={mem.nodes} edges={mem.edges} focus={focus} onPick={pick} /> : <div className="mgraph mgraph--empty">Reading memory</div>}
       </section>
@@ -153,20 +156,21 @@ export function ProvenanceCard({ prov, world }: { prov: Provenance; world: World
   const steps: { id: string; label: string; name: string; edge?: string }[] = []
   const actorEdge = prov.edges.find((e) => e.type !== 'TOLD' && e.type !== 'WITNESSED')
   const ev = prov.nodes.find((n) => n.label === 'Event')
-  if (actorEdge) {
+  // the event's own name already says who did it ("Ada stole Bram's silver hammer"), so the actor gets no chip of its own
+  if (actorEdge && !ev) {
     const a = prov.nodes.find((n) => n.id === actorEdge.from)!
     steps.push({ id: a.id, label: a.label, name: a.label === 'Player' ? world.state?.player.name ?? 'You' : a.name })
   }
-  const VERB: Record<string, string> = { theft: 'stole', returned: 'returned', gifted: 'gave', helped: 'helped', traded: 'traded',
-    caught_lying: 'lied', confrontation: 'confronted', missing: 'went missing', fined: 'fined', healed: 'healed', cheated: 'cheated' }
-  if (ev) steps.push({ id: ev.id, label: 'Event', name: ev.name, edge: actorEdge ? VERB[actorEdge.type.toLowerCase()] ?? actorEdge.type.toLowerCase() : undefined })
+  if (ev) steps.push({ id: ev.id, label: 'Event', name: prov.location ? `${ev.name} (${prov.location.name})` : ev.name })
   prov.chain.forEach((id, i) => {
     const n = prov.nodes.find((x) => x.id === id)!
     steps.push({ id, label: n.label, name: n.label === 'Player' ? 'You' : n.name, edge: i === 0 ? (ev ? 'saw it' : undefined) : 'told' })
   })
   return (
     <div className="prov" ref={ref}>
-      <h3>How {world.nameOf(prov.chain.at(-1)!)} knows</h3>
+      <h3>How {world.nameOf(prov.chain.at(-1)!)} knows
+        {prov.belief && <span className={`prov__now ${prov.belief.stance === 'doubted' ? 'is-doubt' : ''}`}>now <b className="num">{pct(prov.belief.confidence)}</b> {prov.belief.stance === 'doubted' ? 'and doubtful' : 'sure'}</span>}
+      </h3>
       <ol className="prov__path">
         {steps.map((s, i) => (
           <li key={s.id + i} className={`prov__step prov__step--${s.label.toLowerCase()}`}>
@@ -180,7 +184,7 @@ export function ProvenanceCard({ prov, world }: { prov: Provenance; world: World
         <p className="prov__more">{prov.who_knows.filter((k) => k.stance === 'accepted').length} of 10 townsfolk believe it.
           {!!prov.forecast?.length && <> Likely next to hear: {prov.forecast.slice(0, 3).map((f) => f.name).join(', ')}.</>}</p>
       )}
-      <button className="link" onClick={() => { world.setHighlight(null); world.setFocusFact(null) }}>Clear the thread</button>
+      <button className="link" onClick={world.clearTrace}>Clear the thread</button>
     </div>
   )
 }

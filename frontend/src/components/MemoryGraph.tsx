@@ -1,11 +1,19 @@
 import { useMemo, useState } from 'react'
-import { forceCollide, forceLink, forceManyBody, forceRadial, forceSimulation, forceX, forceY, type SimulationNodeDatum } from 'd3-force'
+import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type SimulationNodeDatum } from 'd3-force'
 import type { MemEdge, MemNode } from '../api'
 
 interface N extends SimulationNodeDatum { id: string; d: MemNode; r: number }
 interface L { source: N | string; target: N | string; d: MemEdge }
 
-const RING: Record<string, number> = { Self: 0, Event: 95, Fact: 120, Procedure: 80, Task: 110, NPC: 165, Player: 160, Item: 165, Location: 170 }
+// Each memory type lives in its own zone of the panel, so episodic / semantic / procedural read at a glance.
+// Zones are fractions of the viewBox; the zone captions sit in the corners and never move.
+const ZONE: Record<string, { x: number; y: number; caption: string; cls: string; cx: number; cy: number; anchor: 'start' | 'end' | 'middle' }> = {
+  Event: { x: 0.2, y: 0.3, caption: 'Saw · episodic', cls: 'episodic', cx: 0.03, cy: 0.06, anchor: 'start' },
+  Procedure: { x: 0.22, y: 0.7, caption: 'Knows how · procedural', cls: 'procedural', cx: 0.03, cy: 0.975, anchor: 'start' },
+  Fact: { x: 0.74, y: 0.6, caption: 'Believes · semantic', cls: 'semantic', cx: 0.97, cy: 0.975, anchor: 'end' },
+  Task: { x: 0.72, y: 0.18, caption: 'Tasks', cls: 'coordination', cx: 0.97, cy: 0.06, anchor: 'end' },
+}
+const SELF = { x: 0.45, y: 0.5 }
 
 export function memoryClass(n: MemNode) {
   if (n.label === 'Self') return 'self'
@@ -16,7 +24,7 @@ export function memoryClass(n: MemNode) {
   return 'entity'
 }
 
-export function MemoryGraph({ nodes, edges, focus, onPick, width = 360, height = 300 }: {
+export function MemoryGraph({ nodes, edges, focus, onPick, width = 360, height = 330 }: {
   nodes: MemNode[]; edges: MemEdge[]; focus: string | null; onPick: (n: MemNode) => void; width?: number; height?: number
 }) {
   const [hover, setHover] = useState<string | null>(null)
@@ -25,23 +33,34 @@ export function MemoryGraph({ nodes, edges, focus, onPick, width = 360, height =
     const ids = new Set(ns.map((n) => n.id))
     const ls: L[] = edges.filter((e) => ids.has(e.from) && ids.has(e.to)).map((e) => ({ source: e.from, target: e.to, d: e }))
     const self = ns.find((n) => n.d.label === 'Self')
-    if (self) { self.fx = 0; self.fy = 0 }
+    if (self) { self.fx = SELF.x * width; self.fy = SELF.y * height }
+    // start every node in its zone, so the simulation only has to tidy up
+    ns.forEach((n, i) => {
+      const z = ZONE[n.d.label]
+      n.x = (z ? z.x : 0.5) * width + (((i * 37) % 31) - 15)
+      n.y = (z ? z.y : 0.5) * height + (((i * 53) % 31) - 15)
+    })
+    const zx = (n: N) => (ZONE[n.d.label]?.x ?? SELF.x) * width
+    const zy = (n: N) => (ZONE[n.d.label]?.y ?? SELF.y) * height
     const sim = forceSimulation(ns)
-      .force('link', forceLink<N, L>(ls).id((n) => n.id).distance((l) => (l.d.type === 'ABOUT' ? 38 : l.d.type === 'TOLD_ME' ? 45 : 70)).strength(0.5))
-      .force('charge', forceManyBody().strength(-90))
-      .force('radial', forceRadial<N>((n) => RING[n.d.label] ?? 150, 0, 0).strength(0.35))
-      .force('collide', forceCollide<N>((n) => n.r + 4))
-      .force('x', forceX(0).strength(0.02)).force('y', forceY(0).strength(0.03))
+      .force('link', forceLink<N, L>(ls).id((n) => n.id).distance((l) => (l.d.type === 'ABOUT' ? 34 : l.d.type === 'TOLD_ME' ? 40 : 60)).strength((l) => ((l.source as N).d?.label === 'Self' || (l.target as N).d?.label === 'Self' ? 0.05 : 0.3)))
+      .force('charge', forceManyBody().strength(-70))
+      .force('collide', forceCollide<N>((n) => (memoryClass(n.d) === 'entity' || n.d.label === 'Self' ? n.r + 12 : Math.max(n.r + 16, shortLabel(n.d).length * 2.8))).iterations(3))
+      .force('x', forceX<N>(zx).strength((n) => (ZONE[n.d.label] ? 0.45 : 0.03)))
+      .force('y', forceY<N>(zy).strength((n) => (ZONE[n.d.label] ? 0.45 : 0.03)))
       .stop()
-    for (let i = 0; i < 260; i++) sim.tick()
-    // fit into the viewport
-    const xs = ns.map((n) => n.x ?? 0); const ys = ns.map((n) => n.y ?? 0)
-    const pad = 24
-    const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad, minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad
-    const s = Math.min(width / (maxX - minX || 1), height / (maxY - minY || 1), 1.6)
-    const tx = (x: number) => (x - (minX + maxX) / 2) * s + width / 2
-    const ty = (y: number) => (y - (minY + maxY) / 2) * s + height / 2
-    return { ns: ns.map((n) => ({ ...n, px: tx(n.x ?? 0), py: ty(n.y ?? 0) })), ls, scale: s }
+    const mx = 46, top = 30, bottom = 48 // keep labels and corner captions clear of the edges
+    for (let i = 0; i < 300; i++) {
+      sim.tick()
+      for (const n of ns) {
+        n.x = Math.max(mx, Math.min(width - mx, n.x ?? 0))
+        n.y = Math.max(top, Math.min(height - bottom, n.y ?? 0))
+      }
+    }
+    const placed = ns.map((n) => ({ ...n, px: n.x ?? 0, py: n.y ?? 0 }))
+    const captions = Object.entries(ZONE).filter(([label]) => ns.some((n) => n.d.label === label))
+      .map(([label, z]) => ({ label, text: z.caption, cls: z.cls, x: z.cx * width, y: z.cy * height, anchor: z.anchor }))
+    return { ns: placed, ls, captions }
   }, [nodes, edges, width, height])
 
   const byId = Object.fromEntries(laid.ns.map((n) => [n.id, n]))
@@ -61,6 +80,9 @@ export function MemoryGraph({ nodes, edges, focus, onPick, width = 360, height =
           const on = focus ? lit.has(a.id) && lit.has(b.id) : false
           return <line key={i} x1={a.px} y1={a.py} x2={b.px} y2={b.py} className={`mg-edge mg-edge--${l.d.type.toLowerCase()} ${on ? 'is-on' : ''} ${focus && !on ? 'is-dim' : ''}`} />
         })}
+        {laid.captions.map((c) => (
+          <text key={c.label} x={c.x} y={c.y} textAnchor={c.anchor} className={`mg-caption mg-caption--${c.cls}`}>{c.text}</text>
+        ))}
         {laid.ns.map((n) => (
           <g key={n.id} transform={`translate(${n.px},${n.py})`} className={`mg-node mg-node--${memoryClass(n.d).replace(' ', ' mg-node--')} ${focus && !lit.has(n.id) ? 'is-dim' : ''} ${focus === n.id ? 'is-focus' : ''}`}
             onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover(null)} onClick={() => onPick(n.d)}
@@ -71,7 +93,7 @@ export function MemoryGraph({ nodes, edges, focus, onPick, width = 360, height =
                   : <circle r={n.r} />}
             {n.d.label === 'Self'
               ? <text dy="4" textAnchor="middle">{n.d.name.split(' ').pop()!.slice(0, 1)}</text>
-              : <text className="mg-label" dy={n.r + 10} textAnchor="middle">{shortLabel(n.d)}</text>}
+              : (memoryClass(n.d) !== 'entity' || lit.has(n.id) || hover === n.id) && <text className="mg-label" dy={n.r + 11} textAnchor="middle">{shortLabel(n.d)}</text>}
           </g>
         ))}
       </svg>
@@ -99,8 +121,10 @@ function tipTitle(n: MemNode) {
 
 function shortLabel(n: MemNode) {
   const t = n.label === 'Event' ? (n.kind ?? n.name) : n.label === 'Task' ? n.name.split(' ')[0] : n.name
-  const words = t.replace(/^Captain |^Sister /, '').split(' ')
+  const words = t.replace(/\b(Captain|Sister) /g, '').split(' ')
   let out = ''
-  for (const w of words) { if ((out + ' ' + w).trim().length > 18) break; out = (out + ' ' + w).trim() }
-  return out || t.slice(0, 18)
+  for (const w of words) { if ((out + ' ' + w).trim().length > 20) break; out = (out + ' ' + w).trim() }
+  // never end on a dangling little word ("Investigate a")
+  out = out.replace(/ (a|an|the|of|to|at|for|and|on|in)$/i, '')
+  return out || t.slice(0, 20)
 }
