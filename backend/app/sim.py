@@ -369,7 +369,7 @@ async def _act(pid: str, a: dict[str, Any]) -> dict[str, Any]:
         from .agent import converse  # local import to avoid a cycle
         if npc not in present_ids:
             raise WorldError(f"{nname} is not here")
-        reply = await converse(pid, npc, a.get("message") or "Hello!")
+        reply = await converse(pid, npc, (a.get("message") or "Hello!")[:500])
         return {"ok": True, "message": reply["reply"], "events": [{"type": "say", "npc": npc, "text": reply["reply"]}],
                 "dialogue": reply}
 
@@ -420,7 +420,7 @@ async def _lie(pid, a, tick, session, pname, loc, npc, nname, present_ids) -> di
                       valence=PREDICATE_VALENCE["lied_about"], kind="deed"))
         events.append({"type": "deed", "kind": "caught_lying", "event": eid, "fact": lfid, "claim": lie_claim,
                        "location": loc, "witnesses": [npc]})
-        events.append({"type": "say", "npc": npc, "text": f"{sname}? I know what I saw. Don't take me for a fool."})
+        events.append({"type": "say", "npc": npc, "text": await _rebuttal(pid, npc, sname, conflicts, fid)})
         msg = f"{nname} doesn't buy it - and now that's a story about you."
     elif res["stance"] == "accepted":
         events.append({"type": "say", "npc": npc, "text": f"{sname}? I never would have guessed..."})
@@ -429,6 +429,20 @@ async def _lie(pid, a, tick, session, pname, loc, npc, nname, present_ids) -> di
         events.append({"type": "say", "npc": npc, "text": "Hmm. I'll believe that when I see it."})
         msg = f"{nname} doubts you ({conf:.0%})."
     return {"ok": True, "message": msg, "events": events, "fact": fid, "conflicts": conflicts}
+
+
+async def _rebuttal(pid: str, npc: str, sname: str, conflicts: list[dict[str, Any]], lie: str) -> str:
+    """Why the listener rejects a lie, in terms of how it knows the version it holds instead."""
+    winner = next((c["winner"] for c in conflicts if c["winner"] != lie), None)
+    mine = next((r for r in await store.ro(pid, Q.RECALL_ALL.cypher, {"npc": npc}) if r["fact"] == winner), {})
+    if mine.get("source") == "witnessed":
+        return f"{sname}? I know what I saw. Don't take me for a fool."
+    via = mine.get("via")
+    if via in NPC_BY_ID:
+        return f"{sname}? That's not what {NPC_BY_ID[via]['name']} told me, and I trust them more than you."
+    if via == "player":
+        return f"{sname}? That's not what you told me before."
+    return f"{sname}? That's not what I heard. Don't take me for a fool."
 
 
 def _loc_name(loc: str | None) -> str:
@@ -472,7 +486,7 @@ async def _tick(pid: str) -> dict[str, Any]:
         ti = tick_info(tick_no)
         tasks = [{**t, "fact": t.get("fact_id")} for t in board["tasks"] if t]
         events: list[dict[str, Any]] = []
-        agents = [NPCAgent(pid, n["id"], tick_no, seed, tasks) for n in NPCS]
+        agents = [NPCAgent(pid, n["id"], tick_no, seed, tasks, session) for n in NPCS]
 
         # 2. move
         dest = plan_moves(agents, board["player_loc"], tick_no)
@@ -562,8 +576,8 @@ async def notice_unseen_thefts(pid: str, tick_no: int, session: int, unseen: lis
 class NPCAgent:
     """One NPC's turn. Everything it knows comes from the graph; everything it does is written back."""
 
-    def __init__(self, pid: str, npc: str, tick: int, seed: Any, tasks: list[dict[str, Any]]):
-        self.pid, self.id, self.tick, self.seed = pid, npc, tick, seed
+    def __init__(self, pid: str, npc: str, tick: int, seed: Any, tasks: list[dict[str, Any]], session: int = 1):
+        self.pid, self.id, self.tick, self.seed, self.session = pid, npc, tick, seed, session
         self.meta = NPC_BY_ID[npc]
         self.slot = tick % TICKS_PER_DAY
         self.board = tasks
@@ -654,8 +668,11 @@ class NPCAgent:
             return []
         r = res[0]
         conflicts = await self.rw(Q.RESOLVE_CONFLICT, npc=o["id"], fid=b["fact"]) if r["contested"] else []
+        stance = r["stance"]
+        if conflicts:  # report the stance the listener ends up with, after weighing the rival claims
+            stance = "accepted" if conflicts[0]["winner"] == b["fact"] else "doubted"
         evs = [{"type": "tell", "from": self.id, "to": o["id"], "fact": b["fact"], "claim": b["claim"],
-                "confidence": r["confidence"], "stance": r["stance"], "hop": r["hop"],
+                "confidence": r["confidence"], "stance": stance, "hop": r["hop"],
                 "first_time": r["first_time"], "location": self.view["location"]},
                {"type": "say", "npc": self.id, "text": _gossip_line(b["claim"], o["id"])}]
         for cf in conflicts:
@@ -751,23 +768,39 @@ class NPCAgent:
         if target != self.id and target not in self.company_ids:
             return []
         evs: list[dict[str, Any]] = []
+        wname = NPC_BY_ID[target]["name"]
+        testimony = None
         if target != self.id:
             res, info = await asyncio.gather(
                 self.rw(Q.TELL_RESOLVED, **{"from": target}, to=self.id, fid=t["fact"], conf=0.95, accept=ACCEPT,
                         hop=1, tick=self.tick, channel="testimony"),
                 self.ro(Q.FACT_INFO, fid=t["fact"]))
-            if res:
-                claim = info[0]["fact"].get("claim", t["note"]) if info else t["note"]
-                evs.append({"type": "tell", "from": target, "to": self.id, "fact": t["fact"], "claim": claim,
-                            "confidence": res[0]["confidence"], "stance": res[0]["stance"], "hop": res[0]["hop"],
-                            "first_time": res[0]["first_time"], "channel": "testimony"})
-                evs.append({"type": "say", "npc": target, "text": "Aye, I saw it with my own eyes."})
-        result = f"Eyewitness {NPC_BY_ID[target]['name']} confirmed it."
-        await asyncio.gather(
-            self.rw(Q.TELL_RESOLVED, **{"from": self.id}, to=boss, fid=t["fact"], conf=0.95, accept=ACCEPT, hop=2,
-                    tick=self.tick, channel="findings"),
-            self.rw(Q.CORROBORATE, npc=boss, fid=t["fact"], conf=0.95, by=self.id),
+            if not res:  # the eyewitness no longer holds the story: there is nothing to confirm
+                await self.rw(Q.COMPLETE_TASK, tid=t["id"], tick=self.tick,
+                              result=f"Eyewitness {wname} could not confirm it.", handoff=boss)
+                return [{"type": "task_done", "task": t["id"], "by": self.id, "result": "eyewitness could not confirm"}]
+            testimony = res[0]
+            claim = info[0]["fact"].get("claim", t["note"]) if info else t["note"]
+            evs.append({"type": "tell", "from": target, "to": self.id, "fact": t["fact"], "claim": claim,
+                        "confidence": testimony["confidence"], "stance": testimony["stance"], "hop": testimony["hop"],
+                        "first_time": testimony["first_time"], "channel": "testimony"})
+            evs.append({"type": "say", "npc": target, "text": "Aye, I saw it with my own eyes."})
+        else:
+            info = await self.ro(Q.FACT_INFO, fid=t["fact"])
+            claim = info[0]["fact"].get("claim", t["note"]) if info else t["note"]
+        # findings: the boss's belief is raised to the eyewitness level, then the hand-over is recorded as a TOLD edge
+        before = await self.rw(Q.CORROBORATE, npc=boss, fid=t["fact"], conf=0.95, by=self.id)
+        result = f"Eyewitness {wname} confirmed it."
+        told, _ = await asyncio.gather(
+            self.rw(Q.TELL_RESOLVED, **{"from": self.id}, to=boss, fid=t["fact"], conf=0.95, accept=ACCEPT,
+                    hop=((testimony or {}).get("hop") or 0) + 1, tick=self.tick, channel="findings"),
             self.rw(Q.COMPLETE_TASK, tid=t["id"], tick=self.tick, result=result, handoff=boss))
+        if not told:
+            return evs + [{"type": "task_done", "task": t["id"], "by": self.id, "result": "findings not delivered"}]
+        evs.append({"type": "tell", "from": self.id, "to": boss, "fact": t["fact"], "claim": claim,
+                    "confidence": told[0]["confidence"], "from_confidence": before[0]["before"] if before else None,
+                    "stance": told[0]["stance"], "hop": told[0]["hop"], "first_time": told[0]["first_time"],
+                    "channel": "findings"})
         evs.append({"type": "task_done", "task": t["id"], "by": self.id, "result": result, "handoff": boss})
         evs.append({"type": "handoff", "from": self.id, "to": boss, "task": t["id"], "kind": "findings"})
         return evs
@@ -787,10 +820,11 @@ class NPCAgent:
                     hop=((mine or {}).get("hop") or 0) + 1, tick=self.tick, channel="report"),
             self.rw(Q.COMPLETE_TASK, tid=t["id"], tick=self.tick, result="Reported to the captain.", handoff=guard))
         claim = mine["claim"] if mine else t["note"]
+        if not res:  # the reporter no longer holds the story, so nothing was passed on
+            return [{"type": "task_done", "task": t["id"], "by": self.id, "result": "nothing to report"}]
         return [{"type": "tell", "from": self.id, "to": guard, "fact": t["fact"], "claim": claim,
-                 "confidence": res[0]["confidence"] if res else conf, "stance": res[0]["stance"] if res else "accepted",
-                 "hop": res[0]["hop"] if res else 1, "first_time": res[0]["first_time"] if res else True,
-                 "channel": "report"},
+                 "confidence": res[0]["confidence"], "stance": res[0]["stance"], "hop": res[0]["hop"],
+                 "first_time": res[0]["first_time"], "channel": "report"},
                 {"type": "say", "npc": self.id, "text": "Captain, you need to hear this."},
                 {"type": "task_done", "task": t["id"], "by": self.id, "result": "reported", "handoff": guard},
                 {"type": "handoff", "from": self.id, "to": guard, "task": t["id"], "kind": "report"}]
@@ -801,7 +835,9 @@ class NPCAgent:
                                                self.ro(Q.FACT_INFO, fid=t["fact"]), self.ro(Q.CLOCK))
         chain = [n["name"] for n in (prov[0]["chain"] if prov else [])][:-1]
         info = info[0]["fact"] if info else {}
-        if len(chain) >= 2:
+        if prov and (prov[0]["belief"] or {}).get("source") == "witnessed":
+            how = "I saw it with my own eyes"
+        elif len(chain) >= 2:
             how = f"{chain[-1]} told me, and it traces back to {chain[0]}, who saw it"
         elif chain:
             how = f"{chain[0]} saw it and told me"
@@ -813,7 +849,7 @@ class NPCAgent:
         claim = f"Captain Oswin confronted {pname} about {info.get('object_name', 'a theft')}"
         (eid, _), _ = await asyncio.gather(
             record_deed(self.pid, tick=self.tick, kind="confrontation", loc=loc, summary=claim, witnesses=present,
-                        npc_involved=[{"id": self.id, "role": "accuser"}], player_role="accused",
+                        npc_involved=[{"id": self.id, "role": "accuser"}], player_role="accused", session=self.session,
                         fact=dict(subject="player", subject_name=pname, predicate="confronted", object=self.id,
                                   object_name=self.meta["name"], claim=claim, truth=True, importance=0.6,
                                   valence=PREDICATE_VALENCE["confronted"], kind="deed")),

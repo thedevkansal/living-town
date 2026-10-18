@@ -29,6 +29,8 @@ STOP = {"what", "when", "where", "which", "about", "have", "heard", "there", "th
         "with", "from", "know", "does", "tell", "think", "would", "could", "should", "anything", "something",
         "hello", "please", "really", "today", "town", "were", "they", "them", "been", "said", "says", "just",
         "news", "gossip", "rumour", "rumor", "happened", "happen", "whats", "what's", "going", "lately"}
+MAX_MESSAGE = 500  # characters of player speech an NPC listens to
+MAX_RESOLVE_WORDS = 4  # distinct words resolved against the graph per message
 
 # --------------------------------------------------------------------------- tool schemas for Claude
 TOOL_SPECS: list[dict[str, Any]] = [
@@ -161,9 +163,10 @@ async def scripted_reply(pid: str, npc: str, message: str) -> dict[str, Any]:
         facts.append(target["fact"])
         return _out(f"{target['claim']}. {prov['narrative']}", used, facts, provenance=prov)
 
-    # entity mentions -> resolve against the graph first
-    words = [w for w in re.findall(r"[a-z']+", msg) if len(w) >= 4 and w not in STOP]
-    for w in words:
+    # entity mentions -> resolve against the graph first (distinct words only, and only the first few:
+    # each miss costs up to seven queries, so a long message must not fan out into hundreds)
+    words = list(dict.fromkeys(w for w in re.findall(r"[a-z']+", msg) if len(w) >= 4 and w not in STOP))
+    for w in words[:MAX_RESOLVE_WORDS]:
         hits = await call("resolve_entity", name=w)
         hits = [h for h in hits if h["id"] != npc]
         if not hits:
@@ -300,6 +303,7 @@ async def llm_reply(pid: str, npc: str, message: str) -> dict[str, Any]:
 async def converse(pid: str, npc: str, message: str) -> dict[str, Any]:
     if npc not in NPC_BY_ID:
         raise T.ToolError(f"unknown npc {npc!r}")
+    message = (message or "")[:MAX_MESSAGE]
     scripted = await scripted_reply(pid, npc, message)
     if not settings.llm_enabled:
         return {**scripted, "mode": "scripted", "validated": True}

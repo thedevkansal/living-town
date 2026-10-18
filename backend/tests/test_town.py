@@ -69,6 +69,45 @@ async def test_guard_coordination_and_confrontation(world):
     claimed = next(e for e in events if e["type"] == "task_claimed")
     assert claimed["by"] == "finn"  # the captain delegates; the deputy claims via KNOWS_HOW investigate
     assert any(e["type"] == "confront" and e["npc"] == "oswin" for e in events)
+    findings = next(e for e in events if e["type"] == "tell" and e.get("channel") == "findings")
+    assert findings["to"] == "oswin" and findings["from_confidence"] < 0.9 <= findings["confidence"]
+    # the confrontation is part of this play session's history
+    rows = await store.ro(world, "MATCH (e:Event {kind:'confrontation'})-[:DURING]->(s:Session) RETURN count(e) AS n")
+    assert rows[0]["n"] >= 1
+
+
+async def test_lie_rebuttal_names_the_real_source(world):
+    fid = await run_theft(world)
+    for _ in range(4):
+        await sim.tick(world)
+        mira = {b["fact"]: b for b in await T.recall_all(world, "mira")}
+        if fid in mira:
+            break
+    assert mira[fid]["source"] == "told"
+    where = (await store.ro(world, Q.WHERE_IS.cypher, {"id": "mira"}))[0]["location"]
+    await sim.act(world, {"action": "move", "location": where})
+    out = await sim.act(world, {"action": "lie", "npc": "mira", "subject": "pip", "item": "hammer"})
+    said = next(e["text"] for e in out["events"] if e["type"] == "say" and e["npc"] == "mira")
+    assert "I know what I saw" not in said
+    assert f"{T.NPC_BY_ID[mira[fid]['via']]['name']} told me" in said
+
+
+async def test_long_message_does_not_fan_out(world):
+    q0 = store.stats[world].queries
+    await agent.converse(world, "mira", "xyzzyplugh quuxword " * 2000)
+    assert store.stats[world].queries - q0 < 60
+
+
+async def test_only_the_claimer_completes_a_task(world):
+    fid = await run_theft(world)
+    t = await T.post_task(world, "oswin", "investigate", fid, "investigate")
+    assert (await T.claim_task(world, "finn", t["task"]))["claimed"]
+    try:
+        await T.complete_task(world, "pip", t["task"], "done")
+        raise AssertionError("pip must not complete finn's task")
+    except T.ToolError:
+        pass
+    assert (await T.complete_task(world, "finn", t["task"], "done", "oswin"))["done"]
 
 
 # --------------------------------------------------------------------------- provenance

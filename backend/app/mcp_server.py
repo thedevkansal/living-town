@@ -41,9 +41,11 @@ def _j(x: Any) -> str:
 async def create_world(player_id: str, player_name: str = "Wanderer", reset: bool = False) -> str:
     """Create (or join) the isolated town world for a player id."""
     pid = normalize_player_id(player_id)
-    if reset or not await store.exists(pid):
-        await sim.create_world(pid, player_name)
-    s = await sim.start_session(pid)
+    async with sim.lock_for(pid):
+        if reset or not await sim.world_ok(pid):
+            await sim.create_world(pid, player_name[:24] or "Wanderer")
+            await sim.prune_worlds(keep={pid})
+        s = await sim.start_session(pid)
     return _j({"player_id": pid, "session": s["n"], "clock": await sim.clock(pid)})
 
 
@@ -148,7 +150,7 @@ async def town_analytics(player_id: str) -> str:
 @server.tool()
 async def talk_to(player_id: str, npc: str, message: str) -> str:
     """Say something to an NPC; it answers from its graph memory."""
-    return _j(await agent.converse(await _pid(player_id), npc, message))
+    return _j(await agent.converse(await _pid(player_id), npc, message[:agent.MAX_MESSAGE]))
 
 
 @server.tool()

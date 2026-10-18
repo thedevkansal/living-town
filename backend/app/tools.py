@@ -255,6 +255,14 @@ async def claim_task(pid: str, npc: str, task: str) -> dict[str, Any]:
 
 
 async def complete_task(pid: str, npc: str, task: str, result: str, handoff_to: str | None = None) -> dict[str, Any]:
+    _npc(npc)
+    if handoff_to:
+        _npc(handoff_to)
+    t = next((r for r in await store.ro(pid, Q.TASKS_OPEN.cypher) if r["id"] == task), None)
+    if not t:
+        return {"task": task, "done": False, "reason": "no such open task"}
+    if npc not in (t["claimed_by"], t["posted_by"]):
+        raise ToolError(f"{NPC_BY_ID[npc]['name']} neither claimed nor posted task {task!r}")
     c = (await store.ro(pid, Q.CLOCK.cypher))[0]
     r = await store.rw(pid, Q.COMPLETE_TASK.cypher, {"tid": task, "tick": c["tick"], "result": result,
                                                      "handoff": handoff_to})

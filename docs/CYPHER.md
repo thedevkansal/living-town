@@ -854,7 +854,7 @@ MATCH (t:Task {id:$tid}), (n:NPC {id:$npc}) MERGE (t)-[:FOUND]->(n)
 Handoff of findings raises the receiver's confidence
 
 ```cypher
-MATCH (n:NPC {id:$npc})-[b:BELIEVES]->(f:Fact {id:$fid}) SET b.confidence = CASE WHEN b.confidence < $conf THEN $conf ELSE b.confidence END, b.corroborated_by = $by, b.stance = 'accepted' RETURN b.confidence AS confidence
+MATCH (n:NPC {id:$npc})-[b:BELIEVES]->(f:Fact {id:$fid}) WITH b, b.confidence AS before SET b.confidence = CASE WHEN b.confidence < $conf THEN $conf ELSE b.confidence END, b.corroborated_by = $by, b.stance = 'accepted' RETURN before, b.confidence AS confidence
 ```
 
 ### `teach`

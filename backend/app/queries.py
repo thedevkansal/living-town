@@ -510,9 +510,10 @@ FIRST_WITNESS = q("first_witness", "read", "Trace a Fact back to an eyewitness o
                      WITH w, x, a ORDER BY CASE WHEN a IS NULL THEN 0 ELSE 1 END, x.tick
                      RETURN w.id AS id, w.name AS name LIMIT 1""")
 CORROBORATE = q("corroborate", "write", "Handoff of findings raises the receiver's confidence",
-                """MATCH (n:NPC {id:$npc})-[b:BELIEVES]->(f:Fact {id:$fid})
+                """MATCH (n:NPC {id:$npc})-[b:BELIEVES]->(f:Fact {id:$fid}) WITH b, b.confidence AS before
                    SET b.confidence = CASE WHEN b.confidence < $conf THEN $conf ELSE b.confidence END,
-                       b.corroborated_by = $by, b.stance = 'accepted' RETURN b.confidence AS confidence""")
+                       b.corroborated_by = $by, b.stance = 'accepted'
+                   RETURN before, b.confidence AS confidence""")
 TEACHABLE = q("teachable", "read", "Procedures an NPC is proficient enough to teach",
               """MATCH (me:NPC {id:$id})-[k:KNOWS_HOW]->(p:Procedure) WHERE p.teachable = true AND k.proficiency >= 0.7
                  RETURN p.id AS id, p.name AS name, k.proficiency AS proficiency""")
