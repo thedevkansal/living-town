@@ -70,7 +70,7 @@ class Store:
         if self._db is None:
             kwargs: dict[str, Any] = dict(
                 host=settings.falkordb_host, port=settings.falkordb_port, decode_responses=True,
-                max_connections=POOL_SIZE, timeout=30, socket_connect_timeout=15,
+                max_connections=POOL_SIZE, timeout=30, socket_connect_timeout=15, socket_timeout=10,
                 socket_keepalive=True, socket_keepalive_options=_keepalive_options(),
                 health_check_interval=120, retry_on_error=[ConnectionError, TimeoutError])
             if settings.falkordb_username:

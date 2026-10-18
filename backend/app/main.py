@@ -3,6 +3,7 @@ provenance, analytics, a concurrency benchmark and a WebSocket event stream."""
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import statistics
@@ -12,10 +13,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import agent, sim
 from . import tools as T
@@ -27,25 +29,36 @@ from .world import TICKS_PER_DAY
 log = logging.getLogger("living-town")
 logging.basicConfig(level=logging.INFO)
 
+MAX_MESSAGE = 500  # characters of player speech the dialogue agent reads
+AUTOPLAY_MAX_SECONDS = 30 * 60  # server-side auto-play switches itself off after this long
+AUTOPLAY_NO_VIEWER_TICKS = 3  # ...or after this many ticks with nobody watching the world's stream
+BENCH_COOLDOWN_SECONDS = 15.0
+SEND_TIMEOUT = 2.0  # a WebSocket subscriber that cannot take an event this fast is dropped
+
 
 # --------------------------------------------------------------------------- event hub (WebSocket fan-out)
 class Hub:
     def __init__(self) -> None:
         self.subs: dict[str, set[WebSocket]] = {}
 
+    def watching(self, pid: str) -> int:
+        return len(self.subs.get(pid, ()))
+
     async def publish(self, pid: str, msg: dict[str, Any]) -> None:
-        dead = []
-        for ws in list(self.subs.get(pid, ())):
+        async def send(ws: WebSocket) -> WebSocket | None:
             try:
-                await ws.send_json(msg)
-            except Exception:
-                dead.append(ws)
+                await asyncio.wait_for(ws.send_json(msg), SEND_TIMEOUT)
+                return None
+            except Exception:  # closed, broken or too slow: never let one client stall a world
+                return ws
+
+        dead = await asyncio.gather(*(send(ws) for ws in list(self.subs.get(pid, ()))))
         for ws in dead:
-            self.subs.get(pid, set()).discard(ws)
+            if ws is not None:
+                self.subs.get(pid, set()).discard(ws)
 
 
 hub = Hub()
-autoplay: dict[str, asyncio.Task] = {}
 
 # Render's free tier sleeps a service after 15 minutes without inbound traffic. A request
 # to our own public URL goes through Render's edge, so it counts as traffic; /api/health
@@ -82,7 +95,7 @@ async def lifespan(app: FastAPI):
             pruned = await sim.prune_worlds()
             if pruned:
                 log.info("pruned stale worlds: %s", pruned)
-            if settings.demo_autocreate and not await store.exists(settings.demo_player):
+            if settings.demo_autocreate and not await sim.world_ok(settings.demo_player):
                 await sim.create_world(settings.demo_player, "Traveller")
                 log.info("created demo world town:%s", settings.demo_player)
         except Exception:
@@ -94,13 +107,23 @@ async def lifespan(app: FastAPI):
         pinger.cancel()
     if warm:
         warm.cancel()
-    for t in autoplay.values():
+    for t in sim.autoplay_tasks.values():
         t.cancel()
 
 
 app = FastAPI(title="Living Town", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins.split(","), allow_methods=["*"],
                    allow_headers=["*"])
+
+
+@app.exception_handler(sim.WorldError)
+async def world_error(_: Request, exc: sim.WorldError):
+    return JSONResponse({"detail": str(exc)}, status_code=404 if "not found" in str(exc) else 400)
+
+
+@app.exception_handler(T.ToolError)
+async def tool_error(_: Request, exc: T.ToolError):
+    return JSONResponse({"detail": str(exc)}, status_code=400)
 
 
 def pid_of(raw: str) -> str:
@@ -113,6 +136,17 @@ def pid_of(raw: str) -> str:
 async def require_world(pid: str) -> None:
     if not await store.exists(pid):
         raise HTTPException(404, f"no world for player {pid!r}; POST /api/worlds first")
+
+
+def require_admin(token: str | None) -> None:
+    """Operator-only routes are disabled entirely unless ADMIN_TOKEN is configured."""
+    if not settings.admin_token or not token or not hmac.compare_digest(token, settings.admin_token):
+        raise HTTPException(404, "Not Found")
+
+
+def no_demo_reset(pid: str) -> None:
+    if pid == settings.demo_player:
+        raise HTTPException(403, f"the shared {pid!r} world cannot be reset")
 
 
 # --------------------------------------------------------------------------- meta
@@ -132,23 +166,32 @@ async def catalogue():
 
 
 @app.get("/api/worlds")
-async def list_worlds():
+async def list_worlds(x_admin_token: str | None = Header(None)):
+    require_admin(x_admin_token)
     return {"worlds": await store.list_tenants()}
 
 
 # --------------------------------------------------------------------------- worlds
 class CreateWorld(BaseModel):
-    player_id: str
-    name: str | None = None
+    player_id: str = Field(max_length=64)
+    name: str | None = Field(None, max_length=64)
     reset: bool = False
 
 
 @app.post("/api/worlds")
 async def create_or_join(body: CreateWorld):
     pid = pid_of(body.player_id)
-    returning = await store.exists(pid) and not body.reset
+    if pid.startswith(sim.BENCH_PREFIX):
+        raise HTTPException(400, "that name is reserved")
+    if body.reset:
+        no_demo_reset(pid)
     async with sim.lock_for(pid):
+        returning = not body.reset and await sim.world_ok(pid)
         if not returning:
+            if not await store.exists(pid) and await sim.world_count() >= settings.max_worlds_hard:
+                await sim.prune_worlds(keep={pid})
+                if await sim.world_count() >= settings.max_worlds_hard:
+                    raise HTTPException(503, "The town is full right now. Try again in a few minutes.")
             await sim.create_world(pid, (body.name or body.player_id).strip()[:24] or "Wanderer")
             await sim.prune_worlds(keep={pid})
         sess = await sim.start_session(pid)
@@ -162,20 +205,23 @@ async def create_or_join(body: CreateWorld):
 @app.post("/api/worlds/{player_id}/reset")
 async def reset(player_id: str):
     pid = pid_of(player_id)
-    name = None
-    if await store.exists(pid):
-        name = (await sim.clock(pid))["player_name"]
+    no_demo_reset(pid)
+    await require_world(pid)
+    await sim.stop_autoplay(pid)
     async with sim.lock_for(pid):
-        await sim.create_world(pid, name or player_id)
+        rows = await store.ro(pid, "MATCH (t:Town) RETURN t.player_name AS name")
+        name = (rows[0]["name"] if rows else None) or pid
+        await sim.create_world(pid, name[:24])
         sess = await sim.start_session(pid)
     await hub.publish(pid, {"type": "reset"})
     return {"session": sess["n"], "state": await sim.state(pid)}
 
 
 @app.delete("/api/worlds/{player_id}")
-async def delete_world(player_id: str):
+async def delete_world(player_id: str, x_admin_token: str | None = Header(None)):
+    require_admin(x_admin_token)
     pid = pid_of(player_id)
-    await store.drop(pid)
+    await sim.drop_world(pid)
     return {"deleted": pid}
 
 
@@ -187,22 +233,19 @@ async def get_state(player_id: str):
 
 
 class Action(BaseModel):
-    action: str
-    npc: str | None = None
-    item: str | None = None
-    location: str | None = None
-    subject: str | None = None
-    message: str | None = None
+    action: str = Field(max_length=32)
+    npc: str | None = Field(None, max_length=64)
+    item: str | None = Field(None, max_length=64)
+    location: str | None = Field(None, max_length=64)
+    subject: str | None = Field(None, max_length=64)
+    message: str | None = Field(None, max_length=4000)
 
 
 @app.post("/api/worlds/{player_id}/act")
 async def act(player_id: str, body: Action):
     pid = pid_of(player_id)
     await require_world(pid)
-    try:
-        out = await sim.act(pid, body.model_dump())
-    except (sim.WorldError, T.ToolError) as e:
-        raise HTTPException(400, str(e))
+    out = await sim.act(pid, body.model_dump())
     await hub.publish(pid, {"type": "action", "action": body.action, **out})
     return out
 
@@ -238,43 +281,58 @@ async def advance_day(player_id: str, delay: float = Query(0.0, ge=0, le=5)):
 
 class Autoplay(BaseModel):
     on: bool
-    interval: float = 2.5
+    interval: float = Field(2.5, ge=0.8, le=60)
+
+
+async def _autoplay_loop(pid: str, interval: float) -> None:
+    """Tick a world on a timer until switched off, nobody is watching, the time cap is hit, or a tick fails.
+    Whatever the reason, the UI is told it stopped."""
+    reason, unwatched, started = "stopped", 0, time.monotonic()
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            unwatched = 0 if hub.watching(pid) else unwatched + 1
+            if unwatched >= AUTOPLAY_NO_VIEWER_TICKS:
+                reason = "nobody watching"
+                break
+            if time.monotonic() - started > AUTOPLAY_MAX_SECONDS:
+                reason = "time limit"
+                break
+            try:
+                await _run_ticks(pid, 1, 0)
+            except Exception:
+                log.exception("autoplay tick failed")
+                reason = "error"
+                break
+    finally:
+        if sim.autoplay_tasks.get(pid) is asyncio.current_task():
+            sim.autoplay_tasks.pop(pid, None)
+        await hub.publish(pid, {"type": "autoplay", "on": False, "reason": reason})
 
 
 @app.post("/api/worlds/{player_id}/autoplay")
 async def set_autoplay(player_id: str, body: Autoplay):
     pid = pid_of(player_id)
     await require_world(pid)
-    old = autoplay.pop(pid, None)
-    if old:
-        old.cancel()
+    stopped = await sim.stop_autoplay(pid)  # the old loop announces its own stop
     if body.on:
-        async def loop():
-            while True:
-                await asyncio.sleep(max(0.8, body.interval))
-                try:
-                    await _run_ticks(pid, 1, 0)
-                except Exception:
-                    log.exception("autoplay tick failed")
-                    return
-        autoplay[pid] = asyncio.create_task(loop())
-    await hub.publish(pid, {"type": "autoplay", "on": body.on})
-    return {"autoplay": body.on}
+        sim.autoplay_tasks[pid] = asyncio.create_task(_autoplay_loop(pid, body.interval))
+        await hub.publish(pid, {"type": "autoplay", "on": True})
+    elif not stopped:
+        await hub.publish(pid, {"type": "autoplay", "on": False, "reason": "stopped"})
+    return {"autoplay": body.on, "max_seconds": AUTOPLAY_MAX_SECONDS}
 
 
 # --------------------------------------------------------------------------- NPCs & memory
 class Talk(BaseModel):
-    message: str
+    message: str = Field(max_length=4000)
 
 
 @app.post("/api/worlds/{player_id}/npcs/{npc}/talk")
 async def talk(player_id: str, npc: str, body: Talk):
     pid = pid_of(player_id)
     await require_world(pid)
-    try:
-        out = await agent.converse(pid, npc, body.message[:500])
-    except T.ToolError as e:
-        raise HTTPException(400, str(e))
+    out = await agent.converse(pid, npc, body.message[:MAX_MESSAGE])
     await hub.publish(pid, {"type": "say", "npc": npc, "text": out["reply"]})
     return out
 
@@ -290,7 +348,7 @@ async def memory(player_id: str, npc: str):
 
 
 @app.get("/api/worlds/{player_id}/provenance")
-async def provenance(player_id: str, npc: str, fact: str):
+async def provenance(player_id: str, npc: str = Query(max_length=64), fact: str = Query(max_length=200)):
     pid = pid_of(player_id)
     await require_world(pid)
     try:
@@ -310,7 +368,7 @@ async def fact_spread(player_id: str, fact: str):
 
 
 @app.get("/api/worlds/{player_id}/resolve")
-async def resolve(player_id: str, q: str):
+async def resolve(player_id: str, q: str = Query(max_length=100)):
     pid = pid_of(player_id)
     await require_world(pid)
     return {"matches": await T.resolve_entity(pid, q)}
@@ -336,13 +394,29 @@ class Bench(BaseModel):
     ticks: int = 6
 
 
+_bench_slot = asyncio.Semaphore(1)  # one benchmark at a time across all visitors
+_bench_last_end = 0.0
+
+
 @app.post("/api/bench")
 async def bench(body: Bench):
     """Spin up N isolated worlds and tick them all at once: N x 10 agents reading and writing concurrently."""
-    n = max(1, min(body.tenants, 8))
-    ticks = max(1, min(body.ticks, 12))
+    global _bench_last_end
+    wait = BENCH_COOLDOWN_SECONDS - (time.monotonic() - _bench_last_end)
+    if _bench_slot.locked() or wait > 0:
+        retry = max(1, round(wait)) if wait > 0 else 5
+        raise HTTPException(429, "A stress test is already running or just finished; try again in a few seconds.",
+                            headers={"Retry-After": str(retry)})
+    async with _bench_slot:
+        try:
+            return await _bench(max(1, min(body.tenants, 8)), max(1, min(body.ticks, 12)))
+        finally:
+            _bench_last_end = time.monotonic()
+
+
+async def _bench(n: int, ticks: int) -> dict[str, Any]:
     run = uuid.uuid4().hex[:5]
-    pids = [f"bench-{run}-{i}" for i in range(n)]
+    pids = [f"{sim.BENCH_PREFIX}{run}-{i}" for i in range(n)]
     try:
         await asyncio.gather(*(sim.create_world(p, f"Bench{i}") for i, p in enumerate(pids)))
         for p in pids:  # same deterministic opening for every world
@@ -364,13 +438,17 @@ async def bench(body: Bench):
                 "queries_per_sec": round(queries / secs, 1), "p50_tick_ms": round(statistics.median(lat), 1),
                 "max_tick_ms": round(max(lat), 1)}
     finally:
-        await asyncio.gather(*(store.drop(p) for p in pids), return_exceptions=True)
+        await asyncio.gather(*(sim.drop_world(p) for p in pids), return_exceptions=True)
 
 
 # --------------------------------------------------------------------------- live stream
 @app.websocket("/ws/{player_id}")
 async def ws(websocket: WebSocket, player_id: str):
-    pid = normalize_player_id(player_id)
+    try:
+        pid = normalize_player_id(player_id[:64])
+    except ValueError:
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     hub.subs.setdefault(pid, set()).add(websocket)
     try:

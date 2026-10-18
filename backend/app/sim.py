@@ -19,7 +19,7 @@ import asyncio
 import random
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import queries as Q
@@ -54,13 +54,51 @@ class WorldError(Exception):
     pass
 
 
+BENCH_PREFIX = "bench-"
+
 _locks: dict[str, asyncio.Lock] = {}
+autoplay_tasks: dict[str, asyncio.Task] = {}  # server-side auto-play loops, one per world
 
 
 def lock_for(pid: str) -> asyncio.Lock:
     if pid not in _locks:
         _locks[pid] = asyncio.Lock()
     return _locks[pid]
+
+
+async def stop_autoplay(pid: str) -> bool:
+    """Cancel a world's auto-play loop and wait until it has really stopped."""
+    task = autoplay_tasks.pop(pid, None)
+    if not task or task.done():
+        return False
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    return True
+
+
+async def drop_world(pid: str) -> None:
+    """Delete a world safely: stop its auto-play, then wait for any in-flight tick or action.
+
+    Without this, a tick that is still running after the delete re-creates the graph key
+    (GRAPH.QUERY on a missing key creates an empty graph) and leaves a broken, empty world behind."""
+    await stop_autoplay(pid)
+    async with lock_for(pid):
+        await store.drop(pid)
+
+
+async def world_ok(pid: str) -> bool:
+    """A world exists *and* is intact (an empty graph left behind by an interrupted delete is not)."""
+    if not await store.exists(pid):
+        return False
+    try:
+        return bool(await store.ro(pid, Q.CLOCK.cypher))
+    except Exception:
+        return False
+
+
+async def _require(pid: str) -> None:
+    if not await store.exists(pid):  # cached: costs a round trip only for an unknown or deleted world
+        raise WorldError("world not found")
 
 
 # =========================================================================== world creation
@@ -112,20 +150,31 @@ async def prune_worlds(keep: set[str] | None = None) -> list[str]:
     from .config import settings
     keep = (keep or set()) | {settings.demo_player}
     tenants = await store.list_tenants()
-    if len(tenants) <= settings.max_worlds:
-        return []
-    ages = []
-    for t in tenants:
+    idle_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=settings.prune_idle_minutes)).isoformat(
+        timespec="seconds")
+
+    async def last_active(t: str) -> str:
         try:
             rows = await store.ro(t, Q.LAST_ACTIVE.cypher)
-            ages.append((rows[0]["last_active"] or rows[0]["created_at"] or "") if rows else "", t)
+            return (rows[0]["last_active"] or rows[0]["created_at"] or "") if rows else ""
         except Exception:
-            ages.append(("", t))
-    ages.sort()
-    doomed = [t for _, t in ages if t not in keep][: max(0, len(tenants) - settings.max_worlds)]
+            return ""  # empty or broken graph: oldest of all
+
+    # benchmark worlds are dropped right after their run; only leftovers from a crashed run are collected here
+    bench = [t for t in tenants if t.startswith(BENCH_PREFIX)]
+    players = [t for t in tenants if not t.startswith(BENCH_PREFIX)]
+    doomed = [t for t, ts in zip(bench, await asyncio.gather(*(last_active(t) for t in bench))) if ts < idle_cutoff]
+    if len(players) > settings.max_worlds:
+        ages = sorted(zip(await asyncio.gather(*(last_active(t) for t in players)), players))
+        idle = [t for ts, t in ages if t not in keep and ts < idle_cutoff]  # never evict a world in use
+        doomed += idle[: len(players) - settings.max_worlds]
     for t in doomed:
-        await store.drop(t)
+        await drop_world(t)
     return doomed
+
+
+async def world_count() -> int:
+    return sum(1 for t in await store.list_tenants() if not t.startswith(BENCH_PREFIX))
 
 
 async def start_session(pid: str) -> dict[str, Any]:
@@ -211,6 +260,7 @@ async def _proficiency(pid: str, npc: str, proc: str) -> float:
 
 async def act(pid: str, action: dict[str, Any]) -> dict[str, Any]:
     async with lock_for(pid):
+        await _require(pid)
         return await _act(pid, action)
 
 
@@ -396,6 +446,7 @@ def _gasp(witness: str, owner: str, item: str) -> str:
 # =========================================================================== the tick
 async def tick(pid: str) -> dict[str, Any]:
     async with lock_for(pid):
+        await _require(pid)  # never write into a world deleted while this tick waited for the lock
         return await _tick(pid)
 
 
@@ -414,6 +465,8 @@ async def _tick(pid: str) -> dict[str, Any]:
     with TickTimer(store, pid) as timer:
         clk, snap = await asyncio.gather(store.rw(pid, Q.ADVANCE_AND_READ.cypher, {"now": _now()}),
                                          store.ro(pid, Q.TICK_SNAPSHOT.cypher))
+        if not clk or not snap:
+            raise WorldError("world not found")
         c, board = clk[0], snap[0]
         tick_no, seed, session = c["tick"], c["seed"], c.get("sessions") or 1
         ti = tick_info(tick_no)
