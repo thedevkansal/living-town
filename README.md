@@ -9,9 +9,7 @@ Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs x FalkorDB).
 
 > The live demo runs on Render's free tier: the first visit after ~15 idle minutes takes about a minute to wake up.
 
-<!-- HERO: drop a 1920x1080 screenshot or short GIF at docs/media/hero.gif and uncomment:
-![Living Town: the guard confronts the player, with the provenance thread drawn across the map](docs/media/hero.gif)
--->
+![Captain Oswin explains how he knows: the provenance thread runs from the theft through Bram and Mira to him, drawn across the map, with his memory graph on the right](docs/media/provenance.png)
 
 ## The 30-second version
 
@@ -26,6 +24,8 @@ Ada -[stole]-> (theft) <-[WITNESSED]- Bram -[TOLD]-> Mira -[TOLD]-> Captain Oswi
 ```
 
 Ask Sister Agnes the same thing and she says *"Silver hammer? Nothing in my memory connects to that."* No path in the graph means no answer, not a guess.
+
+![Day 2, dawn: Captain Oswin, who never saw the theft, confronts the player at the Forge while the town talk log shows how the story travelled](docs/media/confront.png)
 
 ## Try it in two minutes (live site)
 
