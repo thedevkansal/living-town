@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, openStream, type Metrics, type Provenance, type SimEvent, type TickResult, type WorldState } from './api'
+import { api, openStream, type Metrics, type Provenance, type SimEvent, type TickResult, type TownEvent, type WorldState } from './api'
 
 export interface Bubble { id: number; npc: string; text: string; long?: boolean }
 export interface Pulse { id: number; from: string; to: string; tone: 'gossip' | 'report' | 'testimony' | 'findings' | 'teach' | 'claim'; doubted?: boolean }
 export interface Ripple { id: number; npc: string; tone: 'witness' | 'learn' | 'doubt' | 'conflict' | 'task' }
 export interface LogLine { id: number; tick: number; slot: string; text: string; tone: string; fact?: string; npc?: string }
 export interface Story { fact: string; claim: string; tick: number; kind: string }
+export interface Greeting { npc: string; text: string; fact?: string }
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+/** `?slow` in the URL: recording pace, about 2 s per hour and longer beats between events. */
+export const slow = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('slow')
 
 let uid = 1
 const nid = () => uid++
@@ -27,10 +30,21 @@ export function useWorld(pid: string | null) {
   const [highlight, setHighlight] = useState<Provenance | null>(null)
   const [focusFact, setFocusFact] = useState<string | null>(null)
   const [spread, setSpread] = useState<Pick<Provenance, 'who_knows' | 'forecast'> | null>(null)
+  const [aboutYou, setAboutYou] = useState(false)
   const queue = useRef<Promise<void>>(Promise.resolve())
   const stateRef = useRef<WorldState | null>(null)
   stateRef.current = state
   const whenRef = useRef<{ tick: number; day: number; slot: string } | null>(null)
+
+  // every animation timer goes through `later`, so nothing fires into an unmounted world
+  const timers = useRef(new Set<number>())
+  const later = useCallback((fn: () => void, ms: number) => {
+    const t = window.setTimeout(() => { timers.current.delete(t); fn() }, ms)
+    timers.current.add(t)
+  }, [])
+  useEffect(() => () => { timers.current.forEach(clearTimeout); timers.current.clear() }, [])
+
+  const notify = useCallback((text: string, tone: 'ok' | 'err' = 'ok') => setToast({ id: nid(), text, tone }), [])
 
   const nameOf = useCallback((id: string) => {
     if (id === 'player') return stateRef.current?.player.name ?? 'You'
@@ -38,10 +52,11 @@ export function useWorld(pid: string | null) {
   }, [])
 
   const refresh = useCallback(async () => {
-    if (!pid) return
+    if (!pid) return null
     const s = await api.state(pid)
     setState(s)
     if (s.metrics.tick_ms) setMetrics(s.metrics)
+    return s
   }, [pid])
 
   // Speech bubbles: at most two at once per place; the rest wait their turn (a short queue per place).
@@ -53,14 +68,14 @@ export function useWorld(pid: string | null) {
   const showBubble = useCallback((b: Bubble) => {
     shown.current = [...shown.current.filter((x) => x.npc !== b.npc), b]
     setBubbles(shown.current)
-    window.setTimeout(() => {
+    later(() => {
       shown.current = shown.current.filter((x) => x.id !== b.id)
       setBubbles(shown.current)
       // let the next queued speaker at a free place talk
       const next = waiting.current.find((w) => shown.current.filter((x) => placeOf(x.npc) === placeOf(w.npc)).length < 2)
       if (next) { waiting.current = waiting.current.filter((w) => w.id !== next.id); showBubble(next) }
-    }, b.long ? 7000 : 3300)
-  }, [placeOf])
+    }, (b.long ? 7000 : 3300) * (slow ? 1.4 : 1))
+  }, [placeOf, later])
   const say = useCallback((npc: string, text: string, long?: boolean) => {
     const b = { id: nid(), npc, text, long }
     const place = placeOf(npc)
@@ -74,13 +89,13 @@ export function useWorld(pid: string | null) {
   const pulse = useCallback((p: Omit<Pulse, 'id'>) => {
     const x = { ...p, id: nid() }
     setPulses((ps) => [...ps, x])
-    setTimeout(() => setPulses((ps) => ps.filter((y) => y.id !== x.id)), 1700)
-  }, [])
+    later(() => setPulses((ps) => ps.filter((y) => y.id !== x.id)), 1700)
+  }, [later])
   const ripple = useCallback((npc: string, tone: Ripple['tone']) => {
     const r = { id: nid(), npc, tone }
     setRipples((rs) => [...rs, r])
-    setTimeout(() => setRipples((rs) => rs.filter((y) => y.id !== r.id)), 1600)
-  }, [])
+    later(() => setRipples((rs) => rs.filter((y) => y.id !== r.id)), 1600)
+  }, [later])
   const addLog = useCallback((line: Omit<LogLine, 'id' | 'tick' | 'slot'>) => {
     const c = whenRef.current ?? stateRef.current?.clock
     setLog((l) => [{ ...line, id: nid(), tick: c?.tick ?? 0, slot: c ? `Day ${c.day}, ${c.slot.toLowerCase()}` : '' }, ...l].slice(0, 120))
@@ -91,9 +106,16 @@ export function useWorld(pid: string | null) {
 
   // ---------------------------------------------------------------- event choreography
   const play = useCallback(async (events: SimEvent[]) => {
-    // pacing: a whole day should play out in ~10 s, however busy the town is
+    // pacing: a whole day should play out in ~10 s (or ~25 s with ?slow), however busy the town is
     const paced = events.filter((e) => e.type === 'deed' || e.type === 'tell' || e.type === 'task_posted' || e.type === 'teach').length
-    const step = reduced ? 40 : Math.min(240, Math.round(1100 / Math.max(1, paced)))
+    const step = reduced ? 40 : slow
+      ? Math.max(380, Math.min(700, Math.round(3200 / Math.max(1, paced))))
+      : Math.min(240, Math.round(1100 / Math.max(1, paced)))
+    // dawn first, so the day's first moves read after it in the log
+    const dawn = events.find((e) => e.type === 'dawn') as Extract<SimEvent, { type: 'dawn' }> | undefined
+    if (dawn) addLog({ tone: 'time', text: `Dawn breaks on day ${dawn.day}. Hearsay fades a little overnight.` })
+    // findings arrive as a `tell`; the handoff only adds a spark when no such line exists
+    const toldFindings = new Set(events.filter((e) => e.type === 'tell' && e.channel === 'findings').map((e) => (e as { to: string }).to))
     // moves first so avatars glide together
     const moves = events.filter((e) => e.type === 'move') as Extract<SimEvent, { type: 'move' }>[]
     if (moves.length) {
@@ -101,15 +123,12 @@ export function useWorld(pid: string | null) {
       for (const m of moves.filter((m) => m.reason)) {
         addLog({ tone: 'task', npc: m.npc, text: `${nameOf(m.npc)} heads to ${locName(stateRef.current, m.to)} to ${m.reason === 'confront' ? 'find you' : m.reason === 'report' ? 'report a crime' : 'question a witness'}.` })
       }
-      await wait(reduced ? 100 : 720)
+      await wait(reduced ? 100 : slow ? 1100 : 720)
     }
     for (const e of events) {
       switch (e.type) {
         case 'player_move':
           setState((s) => s && { ...s, player: { ...s.player, location: e.to } })
-          break
-        case 'dawn':
-          addLog({ tone: 'time', text: `Dawn breaks on day ${e.day}. Hearsay fades a little overnight.` })
           break
         case 'deed':
           addStory(e.fact, e.claim, e.kind)
@@ -121,16 +140,17 @@ export function useWorld(pid: string | null) {
         case 'tell': {
           const tone = (e.channel as Pulse['tone']) ?? 'gossip'
           pulse({ from: e.from, to: e.to, tone, doubted: e.stance === 'doubted' })
-          setTimeout(() => ripple(e.to, e.stance === 'doubted' ? 'doubt' : 'learn'), reduced ? 0 : 900)
+          later(() => ripple(e.to, e.stance === 'doubted' ? 'doubt' : 'learn'), reduced ? 0 : 900)
           addStory(e.fact, e.claim, 'told')
           const verb = e.channel === 'report' ? 'reports to' : e.channel === 'testimony' ? 'gives testimony to' : e.channel === 'findings' ? 'hands findings to' : 'tells'
           // Testimony is always taken from the eyewitness: show the speaker's certainty, then where the
           // listener's belief now stands (the listener may already have heard it as hearsay, so their
-          // hop count stays on the chain they first heard it through).
+          // hop count stays on the chain they first heard it through). Findings likewise update the boss's belief.
           const eyewitness = e.channel === 'testimony'
           const outcome = e.stance === 'doubted'
             ? `${nameOf(e.to)} doubts it, ${pct(e.confidence)}`
-            : eyewitness ? `${nameOf(e.to)} now ${pct(e.confidence)} sure` : `${pct(e.confidence)} sure, hop ${e.hop}`
+            : e.channel === 'findings' && e.from_confidence != null ? `${nameOf(e.to)} ${pct(e.from_confidence)} → ${pct(e.confidence)} sure`
+            : eyewitness || e.channel === 'findings' ? `${nameOf(e.to)} now ${pct(e.confidence)} sure` : `${pct(e.confidence)} sure, hop ${e.hop}`
           addLog({ tone: e.channel ?? 'gossip', fact: e.fact, npc: e.to,
             text: `${nameOf(e.from)} ${verb} ${nameOf(e.to)}: "${e.claim}" (${eyewitness ? `eyewitness, 100% sure; ${outcome}` : outcome})` })
           await wait(step)
@@ -167,7 +187,7 @@ export function useWorld(pid: string | null) {
           addLog({ tone: 'task', npc: e.by, text: `${nameOf(e.by)} completes a task: ${e.result}` })
           break
         case 'handoff':
-          pulse({ from: e.from, to: e.to, tone: 'findings' })
+          if (!toldFindings.has(e.to)) pulse({ from: e.from, to: e.to, tone: 'findings' })
           break
         case 'confront':
           ripple(e.npc, 'conflict')
@@ -180,7 +200,7 @@ export function useWorld(pid: string | null) {
           break
       }
     }
-  }, [addLog, addStory, nameOf, pulse, ripple, say])
+  }, [addLog, addStory, nameOf, pulse, ripple, say, later])
 
   const pending = useRef(0)
   const enqueue = useCallback((fn: () => Promise<void>) => {
@@ -189,13 +209,40 @@ export function useWorld(pid: string | null) {
     return queue.current
   }, [])
   // only resync from the server once the animation has caught up, so avatars never jump ahead of the story
-  const settle = useCallback(async () => { if (pending.current <= 1) await refresh() }, [refresh])
+  const settle = useCallback(async () => { if (pending.current <= 1) await refresh().catch(() => null) }, [refresh])
+
+  /** A returning player's town talk starts from what the graph already holds, not from an empty page. */
+  const seedFromEvents = useCallback((events: TownEvent[], npcs: WorldState['npcs']) => {
+    if (!events.length) return
+    const who = (id: string) => npcs.find((n) => n.id === id)?.name ?? id
+    const lines: LogLine[] = [...events].sort((a, b) => b.tick - a.tick).map((e) => ({
+      id: nid(), tick: e.tick, slot: `Day ${e.day}, ${e.slot.toLowerCase()}`,
+      tone: ['theft', 'caught_lying', 'missing', 'confrontation'].includes(e.kind) ? 'crime' : 'deed',
+      text: `${e.summary.replace(/\.$/, '')}.` + (e.witnesses.length ? ` Seen by ${e.witnesses.map(who).join(', ')}.` : ''),
+    }))
+    setLog((l) => [...l, { id: nid(), tick: -1, slot: '', tone: 'time', text: 'Earlier in Thornbury, from the town graph:' }, ...lines].slice(0, 120))
+  }, [])
+  const remember = useCallback((greetings: Greeting[]) => {
+    for (const g of [...greetings].reverse()) {
+      if (!g.fact) continue
+      const m = g.text.match(/(?:forgotten|remember): (.+) \(([^)]*)\)\.$/)
+      const claim = m?.[1] ?? g.text
+      addStory(g.fact, claim, 'told')
+      addLog({ tone: 'gossip', npc: g.npc, fact: g.fact, text: `${nameOf(g.npc)} remembers: "${claim}"${m ? ` (${m[2]})` : ''}` })
+    }
+  }, [addLog, addStory, nameOf])
 
   // ---------------------------------------------------------------- stream
   useEffect(() => {
     if (!pid) return
+    let live = true
+    let retry: number | undefined
     setLog([]); setStories([]); setHighlight(null); setFocusFact(null)
-    refresh().catch(() => setState(null))
+    // first load retries with backoff, so a cold or flaky backend never leaves the map stuck loading
+    const load = (n: number) => refresh()
+      .then((s) => { if (live && s) seedFromEvents(s.events ?? [], s.npcs) })
+      .catch(() => { if (live) retry = window.setTimeout(() => load(n + 1), Math.min(8000, 1000 * 2 ** n)) })
+    load(0)
     const stop = openStream(pid, (msg) => {
       if (msg.type === 'tick') {
         const t = msg as unknown as TickResult
@@ -214,12 +261,16 @@ export function useWorld(pid: string | null) {
         say(msg.npc as string, msg.text as string)
       } else if (msg.type === 'autoplay') {
         setAutoplay(Boolean(msg.on))
+        const why = msg.reason as string | undefined
+        if (!msg.on && why && why !== 'stopped') {
+          notify(why === 'time limit' ? 'Auto-play paused after its time limit.' : why === 'nobody watching' ? 'Auto-play paused: nobody was watching.' : 'Auto-play stopped after an error.', why === 'error' ? 'err' : 'ok')
+        }
       } else if (msg.type === 'reset') {
-        setLog([]); setStories([]); refresh()
+        setLog([]); setStories([]); refresh().catch(() => null)
       }
     })
-    return stop
-  }, [pid, enqueue, play, refresh, settle, say])
+    return () => { live = false; clearTimeout(retry); stop() }
+  }, [pid, enqueue, play, refresh, settle, say, seedFromEvents, notify])
 
   // spread of the focused story (who knows it, who hears next)
   useEffect(() => {
@@ -228,8 +279,6 @@ export function useWorld(pid: string | null) {
     api.spread(pid, focusFact).then((s) => live && setSpread(s)).catch(() => live && setSpread(null))
     return () => { live = false }
   }, [pid, focusFact, state?.clock.tick])
-
-  const notify = useCallback((text: string, tone: 'ok' | 'err' = 'ok') => setToast({ id: nid(), text, tone }), [])
 
   const act = useCallback(async (body: Record<string, unknown>) => {
     if (!pid) return
@@ -245,7 +294,7 @@ export function useWorld(pid: string | null) {
     setBusy(true)
     try {
       if (kind === 'tick') await api.tick(pid, 1)
-      else await api.advanceDay(pid, reduced ? 0.3 : 0.9)
+      else await api.advanceDay(pid, reduced ? 0.3 : slow ? 2.0 : 0.9)
       await queue.current
     } catch (e) { notify((e as Error).message, 'err') }
     finally { setBusy(false) }
@@ -255,7 +304,7 @@ export function useWorld(pid: string | null) {
     if (!pid) return
     const on = !autoplay
     setAutoplay(on)
-    await api.autoplay(pid, on).catch((e) => notify((e as Error).message, 'err'))
+    try { await api.autoplay(pid, on, slow ? 4 : 2.6) } catch (e) { setAutoplay(!on); notify((e as Error).message, 'err') }
   }, [pid, autoplay, notify])
 
   const reset = useCallback(async () => {
@@ -266,9 +315,12 @@ export function useWorld(pid: string | null) {
     await refresh()
   }, [pid, autoplay, refresh])
 
+  /** Drop the red thread and the tracked story, e.g. when the memory inspector closes. */
+  const clearTrace = useCallback(() => { setHighlight(null); setFocusFact(null) }, [])
+
   return {
-    state, bubbles, pulses, ripples, log, stories, busy, autoplay, toast, metrics, highlight, focusFact, spread,
-    setHighlight, setFocusFact, act, runTicks, toggleAuto, reset, refresh, say, notify, nameOf,
+    state, bubbles, pulses, ripples, log, stories, busy, autoplay, toast, metrics, highlight, focusFact, spread, aboutYou,
+    setHighlight, setFocusFact, setAboutYou, clearTrace, act, runTicks, toggleAuto, reset, refresh, say, notify, nameOf, remember,
   }
 }
 

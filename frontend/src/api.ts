@@ -33,7 +33,7 @@ export interface WorldState {
 export type SimEvent =
   | { type: 'move'; npc: string; from: string; to: string; reason: string | null }
   | { type: 'player_move'; from: string; to: string }
-  | { type: 'tell'; from: string; to: string; fact: string; claim: string; confidence: number; stance: string; hop: number; first_time: boolean; channel?: string }
+  | { type: 'tell'; from: string; to: string; fact: string; claim: string; confidence: number; stance: string; hop: number; first_time: boolean; channel?: string; from_confidence?: number | null }
   | { type: 'player_tell'; npc: string; fact: string; claim: string; confidence: number; stance: string }
   | { type: 'say'; npc: string; text: string; long?: boolean }
   | { type: 'deed'; kind: string; event: string; fact: string; claim: string; location: string; witnesses: string[] }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type Analytics, type Metrics } from './api'
-import { useWorld, type World } from './useWorld'
+import { useWorld, type Greeting, type World } from './useWorld'
 import { TownMap } from './components/TownMap'
 import { ActionBar } from './components/ActionBar'
 import { Inspector } from './components/Inspector'
@@ -19,21 +19,21 @@ export default function App() {
   const [primary, setPrimary] = useState<Joined | null>(null)
   const [second, setSecond] = useState<Joined | null>(null)
   const [split, setSplit] = useState(false)
-  const [greet, setGreet] = useState<Record<string, { npc: string; text: string }[]>>({})
+  const [greet, setGreet] = useState<Record<string, Greeting[]>>({})
 
   useEffect(() => { api.health().then(setHealth).catch(() => setHealth({ ok: false, mode: 'offline' })) }, [])
 
-  const join = useCallback(async (name: string, reset = false): Promise<Joined> => {
-    const pid = slug(name)
+  const join = useCallback(async (name: string, reset = false, id?: string): Promise<Joined> => {
+    const pid = id ?? slug(name)
     const r = await api.join(pid, name.trim() || 'Wanderer', reset)
     setGreet((g) => ({ ...g, [pid]: r.greetings }))
     return { pid, name: r.state.player.name, returning: r.returning, session: r.session }
   }, [])
 
   const enterSplit = async () => {
-    if (!second) {
-      const other = primary?.pid === 'bo' ? 'Cy' : 'Bo'
-      setSecond(await join(store.get('lt.player2') ?? other))
+    if (!second && primary) {
+      // a fresh neighbour world derived from this player, so the demo never borrows someone else's town
+      try { setSecond(await join('Bo', true, `${primary.pid}-2`.slice(0, 32))) } catch { return }
     }
     setSplit(true)
   }
@@ -88,7 +88,7 @@ function TopBar({ health, split, onSplit, onLeave }: { health: { ok: boolean; mo
       </div>
       <div className="top__right">
         <span className={`badge badge--${health?.mode ?? 'scripted'}`} title={health?.mode === 'llm' ? 'NPC dialogue uses Claude with a fixed tool catalogue' : 'No ANTHROPIC_API_KEY: deterministic agents and templated replies from graph memory'}>
-          {health?.mode === 'llm' ? 'Claude dialogue' : 'Scripted agents'}
+          {health?.mode === 'llm' ? 'Claude dialogue' : 'Rule-based agents'}
         </span>
         <button className={`btn btn--toggle ${split ? 'is-on' : ''}`} onClick={onSplit} aria-pressed={split}>{split ? 'One world' : 'Two players side by side'}</button>
         <button className="btn btn--quiet" onClick={onLeave}>Switch player</button>
@@ -97,18 +97,24 @@ function TopBar({ health, split, onSplit, onLeave }: { health: { ok: boolean; mo
   )
 }
 
-function WorldPane({ joined, greetings, compact }: { joined: Joined; greetings?: { npc: string; text: string }[]; compact?: boolean }) {
+function WorldPane({ joined, greetings, compact }: { joined: Joined; greetings?: Greeting[]; compact?: boolean }) {
   const world = useWorld(joined.pid)
   const [selected, setSelected] = useState<string | null>(null)
   const [showCliques, setShowCliques] = useState(false)
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   const [banner, setBanner] = useState(true)
+  const { clearTrace } = world
+  // opening another memory, or closing the inspector, drops the red thread and the tracked story
+  const select = useCallback((id: string | null) => {
+    setSelected((cur) => { if (cur !== id) clearTrace(); return id })
+  }, [clearTrace])
   const act = world.act
   const walk = useCallback((loc: string) => { act({ action: 'move', location: loc }) }, [act])
 
   // greet the player from persistent memory once the town is drawn
   useEffect(() => {
     if (!world.state || !greetings?.length) return
+    if (joined.returning) world.remember(greetings)
     const ts = greetings.map((g, i) => window.setTimeout(() => world.say(g.npc, g.text, true), 600 + i * 1400))
     const t = window.setTimeout(() => setBanner(false), 9000)
     return () => { ts.forEach(clearTimeout); clearTimeout(t) }
@@ -119,32 +125,33 @@ function WorldPane({ joined, greetings, compact }: { joined: Joined; greetings?:
   return (
     <section className={`pane ${compact ? 'pane--compact' : ''}`} aria-label={`${joined.name}'s world`}>
       <div className="pane__stage">
-        <div className="pane__hud">
-          <div className="hud__who">
-            <b>{joined.name}'s Thornbury</b>
-            <span>graph <code>town:{joined.pid}</code>, session {joined.session}</span>
-          </div>
-          <MetricStrip m={world.metrics} />
-        </div>
         {banner && joined.returning && (
           <div className="banner" role="status">Welcome back. This is visit {joined.session}, and the town remembers what you did.</div>
         )}
         <TownMap state={world.state} bubbles={world.bubbles} pulses={world.pulses} ripples={world.ripples} selected={selected}
-          onSelect={(id) => setSelected(selected === id ? null : id)} onWalk={walk}
-          highlight={world.highlight} spread={world.spread} communities={showCliques ? analytics?.communities : null} compact={compact} />
+          onSelect={(id) => select(selected === id ? null : id)} onWalk={walk}
+          highlight={world.highlight} spread={world.spread} communities={showCliques ? analytics?.communities : null} compact={compact}>
+          <div className="pane__hud">
+            <div className="hud__who">
+              <b>{joined.name}'s Thornbury</b>
+              <span>graph <code>town:{joined.pid}</code>, session {joined.session}</span>
+            </div>
+            <MetricStrip m={world.metrics} />
+          </div>
+        </TownMap>
         {world.toast && <Toast key={world.toast.id} text={world.toast.text} tone={world.toast.tone} />}
         {compact && selected && (
-          <div className="overlay-insp"><Inspector world={world} pid={joined.pid} npc={selected} onClose={() => setSelected(null)} /></div>
+          <div className="overlay-insp"><Inspector world={world} pid={joined.pid} npc={selected} onClose={() => select(null)} /></div>
         )}
       </div>
-      <ActionBar world={world} onTalk={setSelected} compact={compact} />
+      <ActionBar world={world} onTalk={select} compact={compact} />
       {compact ? (
         <div className="pane__log"><TalkLog world={world} limit={4} /></div>
       ) : (
         <div className="pane__side">
           {selected
-            ? <Inspector world={world} pid={joined.pid} npc={selected} onClose={() => { setSelected(null) }} />
-            : <SidePanel world={world} pid={joined.pid} onSelect={setSelected} showCliques={showCliques} setShowCliques={setShowCliques} analytics={analytics} setAnalytics={setAnalytics} />}
+            ? <Inspector world={world} pid={joined.pid} npc={selected} onClose={() => select(null)} />
+            : <SidePanel world={world} pid={joined.pid} onSelect={select} showCliques={showCliques} setShowCliques={setShowCliques} analytics={analytics} setAnalytics={setAnalytics} />}
         </div>
       )}
     </section>

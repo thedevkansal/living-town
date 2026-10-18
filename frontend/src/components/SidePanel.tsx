@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, type Analytics, type Bench } from '../api'
-import { type World } from '../useWorld'
+import { type LogLine, type World } from '../useWorld'
 
 type Tab = 'talk' | 'stories' | 'board' | 'insights'
 
@@ -31,15 +31,30 @@ export function SidePanel({ world, pid, onSelect, showCliques, setShowCliques, a
   )
 }
 
+/** Lines that concern the player: their deeds, stories about them, and the agents acting on those stories. */
+function aboutPlayer(l: LogLine, name: string) {
+  if (['crime', 'claim', 'conflict', 'task', 'time', 'testimony', 'findings', 'report'].includes(l.tone)) return true
+  const t = l.text.toLowerCase()
+  return (!!name && t.includes(name.toLowerCase())) || /\byou\b/.test(t)
+}
+
 export function TalkLog({ world, onSelect, limit }: { world: World; onSelect?: (npc: string) => void; limit?: number }) {
-  const lines = limit ? world.log.slice(0, limit) : world.log
-  if (!lines.length) {
+  const name = world.state?.player.name ?? ''
+  const all = limit ? world.log.slice(0, limit) : world.log
+  const lines = world.aboutYou ? all.filter((l) => aboutPlayer(l, name)) : all
+  if (!all.length) {
     return <p className="empty">Nothing has happened yet. Walk to the Forge, steal the silver hammer, then sleep till dawn and watch the story travel.</p>
   }
   return (
+    <>
+    {!limit && (
+      <label className="switch log__filter">
+        <input type="checkbox" checked={world.aboutYou} onChange={(e) => world.setAboutYou(e.target.checked)} /> Only stories about you
+      </label>
+    )}
     <ol className="log">
       {lines.map((l) => (
-        <li key={l.id} className={`log__line log--${l.tone}`}>
+        <li key={l.id} className={`log__line log--${l.tone} ${aboutPlayer(l, name) ? '' : 'is-aside'}`}>
           <time>{l.slot}</time>
           <p>{l.text}</p>
           <div className="log__acts">
@@ -49,6 +64,7 @@ export function TalkLog({ world, onSelect, limit }: { world: World; onSelect?: (
         </li>
       ))}
     </ol>
+    </>
   )
 }
 
@@ -133,7 +149,10 @@ function Insights({ world, pid, showCliques, setShowCliques, analytics, setAnaly
       <div className="ins">
         <h4>Concurrency check</h4>
         <p className="muted">Creates four isolated worlds and ticks them at once: 40 agents reading and writing their graphs in parallel.</p>
-        <button className="btn" disabled={running} onClick={async () => { setRunning(true); try { setBench(await api.bench(4, 6)) } finally { setRunning(false) } }}>
+        <button className="btn" disabled={running} onClick={async () => {
+          setRunning(true)
+          try { setBench(await api.bench(4, 6)) } catch (e) { world.notify((e as Error).message, 'err') } finally { setRunning(false) }
+        }}>
           {running ? 'Running 40 agents' : 'Run the stress test'}
         </button>
         {bench && (
