@@ -2,6 +2,9 @@
 
 **A graph memory engine for multi-agent systems, shown as a town that gossips.**
 
+**Live demo:** https://living-town.onrender.com  
+_Hosted on Render's free tier: the first visit after ~15 idle minutes takes about a minute to wake up._
+
 Ten NPC agents live in Thornbury. Each one's memory is a subgraph in FalkorDB: what they **saw** (episodic), what they **believe and who told them** (semantic, with provenance), and what they **know how to do** (procedural). When you steal the blacksmith's hammer, only the blacksmith sees it. Over the next simulated hours the story physically travels along social edges, losing confidence at every hop, until a guard who saw nothing walks up to you the next morning. Ask him *"How do you know?"* and he answers with the exact path through the graph:
 
 ```
