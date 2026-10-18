@@ -2,7 +2,7 @@
 
 **A graph memory engine for multi-agent systems, shown as a town that gossips.**
 
-**[Live demo](https://living-town.onrender.com)** · **Demo video:** _(link added at submission)_ · **[Every Cypher query](docs/CYPHER.md)** · **[Demo script](docs/DEMO.md)**
+**[Demo video](https://drive.google.com/drive/folders/1ML5B1YFaR68oqpZUXvne8zxoehw8B_qR)** · **[Live demo](https://living-town.onrender.com)** · **[Every Cypher query](docs/CYPHER.md)**
 
 Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs x FalkorDB).
 **Tracks:** Agent Memory and Coordination (primary) · Agents That Act on Connected Data.
@@ -353,4 +353,4 @@ All characters, places and events are synthetic and invented for this project. N
 
 ## AI assistance disclosure
 
-Built with Claude Code (Anthropic) as the coding assistant, per hackathon rule 11. Claude Code wrote most of the code, tests and docs. The author chose the concept and the tracks (after building and comparing two candidate projects), set the scope and priorities, tested the deployed app, and directed each round of fixes from those tests. The running product optionally uses Claude for NPC dialogue; without an API key it uses rule-based agents.
+Built with Claude Code (Anthropic) as the coding assistant, per hackathon rule 11. Claude Code wrote most of the code, tests and docs. The author chose the concept and the tracks (after building and comparing two candidate projects), set the scope and priorities, tested the deployed app, and directed each round of fixes from those tests. The running product optionally uses Claude for NPC dialogue; without an API key it uses rule-based agents. The demo video is an automated recording of the live site (driven by a script), narrated with an AI text-to-speech voice (ElevenLabs).
