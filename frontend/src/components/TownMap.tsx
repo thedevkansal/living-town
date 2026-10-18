@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, type ReactNode } from 'react'
 import type { Location, NPC, Provenance, WorldState } from '../api'
 import type { Bubble, Pulse, Ripple } from '../useWorld'
 import { Building } from './Buildings'
@@ -22,7 +22,7 @@ const TREES: [number, number, number][] = [
   [210, 300, 14], [800, 320, 13], [450, 600, 16], [490, 625, 12], [760, 600, 12], [30, 300, 16], [170, 240, 10],
 ]
 
-export interface Spot { x: number; y: number }
+export interface Spot { x: number; y: number; alt?: boolean }
 
 /** Avatar slots: a gentle arc under each building, two rows when crowded. */
 export function layout(state: WorldState): Record<string, Spot> {
@@ -35,7 +35,7 @@ export function layout(state: WorldState): Record<string, Spot> {
       const row = Math.floor(i / perRow)
       const inRow = Math.min(perRow, here.length - row * perRow)
       const k = i % perRow - (inRow - 1) / 2
-      spots[id] = { x: loc.x + k * 34, y: loc.y + 52 + row * 36 + Math.abs(k) * -3 }
+      spots[id] = { x: loc.x + k * 34, y: loc.y + 52 + row * 36 + Math.abs(k) * -3, alt: (i % perRow) % 2 === 1 }
     })
   }
   return spots
@@ -69,9 +69,11 @@ interface Props {
   spread: Pick<Provenance, 'who_knows' | 'forecast'> | null
   communities?: Record<string, number> | null
   compact?: boolean
+  /** overlays pinned to the map frame (the HUD), so they never hang off a narrower map */
+  children?: ReactNode
 }
 
-export function TownMap({ state, bubbles, pulses, ripples, selected, onSelect, onWalk, highlight, spread, communities, compact }: Props) {
+export function TownMap({ state, bubbles, pulses, ripples, selected, onSelect, onWalk, highlight, spread, communities, compact, children }: Props) {
   const spots = useMemo(() => layout(state), [state])
   const light = LIGHT[state.clock.slot] ?? LIGHT.Midday
   const npcById = useMemo(() => Object.fromEntries(state.npcs.map((n) => [n.id, n])), [state.npcs])
@@ -178,6 +180,7 @@ export function TownMap({ state, bubbles, pulses, ripples, selected, onSelect, o
             )
           })}
         </div>
+        {children}
       </div>
     </div>
   )
@@ -200,6 +203,7 @@ function Avatar({ npc, spot, selected, onSelect, knows, next, inThread, ripples 
   next: boolean; inThread: boolean; ripples: Ripple[]
 }) {
   const cls = ['avatar']
+  if (spot?.alt) cls.push('avatar--alt')
   if (selected) cls.push('avatar--selected')
   if (knows) cls.push(knows.hop === 0 ? 'avatar--witness' : knows.stance === 'accepted' ? 'avatar--knows' : 'avatar--doubts')
   if (next) cls.push('avatar--next')
