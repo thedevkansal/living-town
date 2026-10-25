@@ -62,7 +62,7 @@ hub = Hub()
 
 # Render's free tier sleeps a service after 15 minutes without inbound traffic. A request
 # to our own public URL goes through Render's edge, so it counts as traffic; /api/health
-# also pings FalkorDB, which keeps a free FalkorDB Cloud instance from pausing.
+# also writes a heartbeat to FalkorDB, which keeps a free FalkorDB Cloud instance from stopping.
 SELF_PING_SECONDS = 10 * 60
 
 
@@ -150,11 +150,20 @@ def no_demo_reset(pid: str) -> None:
 
 
 # --------------------------------------------------------------------------- meta
+_last_heartbeat = 0.0
+
+
 @app.get("/api/health")
 async def health():
-    """Liveness for the platform and the keep-alive cron. Pings FalkorDB so the cloud DB stays active too.
-    Deliberately reveals nothing about where the database lives."""
-    db = await store.ping()
+    """Liveness for the platform and the keep-alive cron. Writes a heartbeat to FalkorDB (at most once
+    a minute) so the free cloud instance is not stopped as idle. Reveals nothing about where it lives."""
+    global _last_heartbeat
+    if time.monotonic() - _last_heartbeat > 60:
+        db = await store.heartbeat()
+        if db:
+            _last_heartbeat = time.monotonic()
+    else:
+        db = await store.ping()
     return {"ok": db, "db": db, "mode": settings.mode, "llm": settings.llm_enabled}
 
 

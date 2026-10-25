@@ -145,6 +145,16 @@ class Store:
         except Exception:
             return False
 
+    async def heartbeat(self) -> bool:
+        """A real graph write. FalkorDB Cloud's free tier stops instances it sees as idle, and
+        listing graphs alone does not count as activity. Uses its own graph, outside the town: prefix."""
+        try:
+            await self.db.select_graph("keepalive").query(
+                "MERGE (h:Heartbeat {id: 1}) SET h.at = timestamp() RETURN h.at")
+            return True
+        except Exception:
+            return False
+
 
 class TickTimer:
     """Measures latency + write volume for one simulation tick of one tenant."""
